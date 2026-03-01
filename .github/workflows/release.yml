@@ -1,0 +1,32 @@
+# On push of a tag v* (e.g. v1.0.0): build all binaries and create a GitHub Release with assets.
+# You still: bump version in deno.json, commit, tag (e.g. git tag v1.0.0), push tag.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: "v2.x"
+
+      - name: Build all binaries
+        run: deno task compile:all
+
+      - name: Create GitHub Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

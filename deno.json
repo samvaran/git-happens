@@ -1,0 +1,15 @@
+{
+  "name": "git-happens",
+  "version": "0.0.1",
+  "tasks": {
+    "run": "deno run --allow-read --allow-net --allow-run src/main.ts",
+    "compile": "deno run --allow-read --allow-run --allow-write scripts/compile.ts",
+    "compile:all": "deno run --allow-read --allow-run --allow-write scripts/compile.ts --all",
+    "sync-version": "deno run --allow-read --allow-write scripts/sync_version.ts"
+  },
+  "compilerOptions": { "strict": true },
+  "imports": {
+    "@cliffy/prompt/select": "jsr:@cliffy/prompt@^1.0.0/select",
+    "@cliffy/prompt/confirm": "jsr:@cliffy/prompt@^1.0.0/confirm"
+  }
+}
