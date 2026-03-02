@@ -1,0 +1,10 @@
+#!/bin/sh
+# Run Deno format check before each commit; blocks commit if not formatted.
+# Install: git config core.hooksPath .githooks
+
+set -e
+cd "$(git rev-parse --show-toplevel)"
+deno fmt --check || {
+  echo "deno fmt --check failed. Run 'deno fmt' and try the commit again."
+  exit 1
+}
