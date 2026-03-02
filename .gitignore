@@ -3,3 +3,6 @@ dist/
 git-happens
 .Deno/
 deno.lock
+.DS_Store
+.env
+.temp/
