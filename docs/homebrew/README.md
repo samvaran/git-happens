@@ -42,3 +42,12 @@ Users run once: `brew tap dvarka/git-happens`, then `brew install git-happens` (
 ## Skipping tap updates
 
 If you don’t set the `TAP_PAT` secret, the tap job is skipped and releases still work; only the GitHub Release and assets are published.
+
+## Troubleshooting
+
+- **Tap doesn’t update after a release**  
+  - Check **Actions** in the **git-happens** repo: did **“Update Homebrew tap”** run? If it’s missing, the job is skipped because `TAP_PAT` isn’t set — add the secret.  
+  - If the job ran but the Formula didn’t change: the workflow defaults to `{org}/homebrew-git-happens`. If your tap repo has a different name, set the **`TAP_REPO`** variable (e.g. `dvarka/homebrew-git-happens`).
+
+- **Formula `url` must point at the app repo**  
+  The tarball Homebrew downloads is the **git-happens** source (the app), not the tap repo. In the Formula, `url` and `homepage` should use **`dvarka/git-happens`**, not `dvarka/homebrew-git-happens`.

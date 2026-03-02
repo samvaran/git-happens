@@ -1,6 +1,6 @@
 # After a release is published: update the Homebrew tap Formula (version + sha256 of source tarball).
 # Requires: repo secret TAP_PAT (token with write access to the tap repo).
-# Optional: repo variable TAP_REPO (e.g. "owner/homebrew-tap"). Defaults to "{owner}/homebrew-tap".
+# Optional: repo variable TAP_REPO (e.g. "owner/homebrew-git-happens"). Defaults to "{owner}/homebrew-git-happens".
 # Skip this job if TAP_PAT is not set.
 name: Update Homebrew tap
 
@@ -35,7 +35,7 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
           SHA256: ${{ steps.sha.outputs.sha256 }}
         run: |
-          TAP_REPO="${TAP_REPO:-$GITHUB_REPOSITORY_OWNER/homebrew-tap}"
+          TAP_REPO="${TAP_REPO:-$GITHUB_REPOSITORY_OWNER/homebrew-git-happens}"
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git clone "https://x-access-token:${TAP_PAT}@github.com/${TAP_REPO}.git" tap
@@ -58,4 +58,5 @@ jobs:
 
           git add "$FORMULA"
           git commit -m "git-happens ${VERSION}"
-          git push
+          git push origin HEAD
+          echo "::notice::Tap updated: ${TAP_REPO} Formula/git-happens.rb -> v${VERSION}"
