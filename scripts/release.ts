@@ -7,7 +7,7 @@
  */
 const root = new URL("..", import.meta.url).pathname;
 const doPush = Deno.args.includes("--push");
-const args = Deno.args.filter((a) => a !== "--push");
+const args = Deno.args.filter((a) => a !== "--push" && a !== "--");
 const versionArg = args[0];
 
 if (!versionArg) {
