@@ -1,8 +1,8 @@
 # After a release is published: update the Homebrew tap Formula (version + sha256 of source tarball).
 # Requires: repo secret TAP_PAT (token with write access to the tap repo).
 # Optional: repo variable TAP_REPO (e.g. "owner/homebrew-git-happens"). Defaults to "{owner}/homebrew-git-happens".
-# Skip this job if TAP_PAT is not set.
-name: Update Homebrew tap
+# If TAP_PAT is not set, the workflow fails at the first step with a clear message.
+name: Update homebrew tap
 
 on:
   release:
@@ -16,9 +16,17 @@ on:
 
 jobs:
   tap:
-    if: ${{ secrets.TAP_PAT != '' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Require TAP_PAT
+        env:
+          TAP_PAT: ${{ secrets.TAP_PAT }}
+        run: |
+          if [ -z "$TAP_PAT" ]; then
+            echo "::error::TAP_PAT secret is not set. Add it in repo Settings → Secrets and variables → Actions to enable tap updates."
+            exit 1
+          fi
+
       - name: Set version and tarball URL
         id: meta
         run: |
