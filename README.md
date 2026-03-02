@@ -8,20 +8,25 @@ AI-powered PR reviews from the CLI: list PRs (assigned or review-requested), pic
 
 - [Deno](https://deno.land/) (for development) or a pre-built binary
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated
-- (Optional) An AI CLI that accepts a prompt on stdin and returns JSON on stdout. Choose it with a flag: `--claude`, `--gemini`, or `--cursor` (default: `--claude`). If the binary is missing, the app shows a stub review and still demonstrates the flow.
+- (Optional) At least one AI CLI that accepts a prompt on stdin and returns JSON on stdout. At startup the app checks which are installed (Claude, Gemini, Cursor, Codex) and lets you pick one. If none are installed, it shows install instructions and exits.
+
+## Install
+
+**Homebrew (macOS/Linux):**
+brew tap dvarka/git-happens && brew install git-happens
 
 ## Run (development)
 
 ```bash
-deno task run              # uses Claude by default
-deno task run -- --gemini  # use Gemini
-deno task run -- --cursor  # use Cursor
+deno task run
 ```
+
+At startup you’ll see a setup check (gh + AI CLIs) and, if multiple AIs are installed, a screen to choose which one to use.
 
 Or with permissions explicitly:
 
 ```bash
-deno run --allow-read --allow-net --allow-run src/main.ts --claude
+deno run --allow-read --allow-net --allow-run --allow-write src/main.ts
 ```
 
 ## Build a single executable
@@ -36,7 +41,7 @@ deno task compile
 deno task compile:all
 ```
 
-The version comes from `deno.json` and is synced into the binary (e.g. `git-happens --version`). See [docs/RELEASING.md](docs/RELEASING.md) for how to bump and release.
+The version comes from `deno.json` and is synced into the binary (e.g. `git-happens --version`). To cut a release: `deno task release -- patch --push` (or see [docs/RELEASING.md](docs/RELEASING.md)).
 
 Required permissions are baked in at compile time: `--allow-read`, `--allow-net`, `--allow-run` (for `gh` and the AI CLI).
 
@@ -62,8 +67,10 @@ So the CLI is used like an API: text in → text out. When you run the review, y
 
 ## Configuration
 
-- **AI backend:** Pass `--claude`, `--gemini`, or `--cursor` to choose which CLI is invoked (default: `--claude`). The app runs that binary with the prompt on stdin and parses JSON from stdout.
+- **AI backend:** Chosen at startup. The app checks which AI CLIs are installed; if multiple, you pick one. The app runs that binary with the prompt on stdin and parses JSON from stdout.
 - **Repo:** Run from any directory; the app uses the PR’s repo for diff and submit. Picked PRs always include repo info.
+- **Token usage:** If the CLI prints token or usage info to stderr (e.g. `input_tokens` / `output_tokens` or “X tokens”), the app parses it and shows a line like `Token usage: 1,234 in / 567 out (from CLI stderr)`. Not all CLIs report this; when they do, it appears after the review or fixes run.
+- **Streaming:** On macOS and Linux the app runs the AI CLI under a PTY (via the system `script` command) so the CLI sees a TTY and may stream output as it’s generated. On Windows, or if `script` isn’t available, a loading spinner is shown instead. Streaming depends on the CLI actually flushing when attached to a TTY.
 
 ## Docs
 

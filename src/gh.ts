@@ -1,4 +1,9 @@
-import type { GitHubReviewPayload, PRListItem } from "./types.ts";
+import type {
+  GitHubReviewPayload,
+  PRListItem,
+  PrReview,
+  PrReviewComment,
+} from "./types.ts";
 
 const GH = "gh";
 
@@ -177,6 +182,61 @@ export async function getRepo(): Promise<{ owner: string; repo: string } | null>
   return null;
 }
 
+/** Run git in repo root; returns stdout. Throws on non-zero exit. */
+export async function runGit(args: string[], cwd?: string): Promise<string> {
+  const cmd = new Deno.Command("git", {
+    args,
+    cwd: cwd ?? undefined,
+    stdin: "inherit",
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const result = await cmd.spawn().output();
+  const out = new TextDecoder().decode(result.stdout);
+  const err = new TextDecoder().decode(result.stderr);
+  if (!result.success) {
+    throw new Error(`git ${args.join(" ")} failed: ${err || result.code}`);
+  }
+  return out;
+}
+
+/** Get the repository root directory (for running git apply etc.). */
+export async function getRepoRoot(): Promise<string | null> {
+  try {
+    const out = await runGit(["rev-parse", "--show-toplevel"]);
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Get the open PR for the current branch in the current repo, if any. Read-only. */
+export async function getCurrentBranchPr(repoSlug: string): Promise<{ number: number; title: string; url: string } | null> {
+  try {
+    const raw = await gh(["pr", "view", "-R", repoSlug, "--json", "number,title,url"]);
+    const data = JSON.parse(raw) as { number: number; title?: string; url?: string };
+    if (typeof data.number !== "number") return null;
+    return {
+      number: data.number,
+      title: data.title ?? "",
+      url: data.url ?? "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Get the head commit SHA of a PR (required for PENDING/draft reviews). */
+export async function getPrHeadSha(
+  owner: string,
+  repo: string,
+  pullNumber: number
+): Promise<string> {
+  const path = `repos/${owner}/${repo}/pulls/${pullNumber}`;
+  const raw = await gh(["api", path, "-q", ".head.sha"]);
+  return raw.trim();
+}
+
 /** Submit a review via GitHub REST API (gh api). */
 export async function submitReview(
   owner: string,
@@ -186,4 +246,162 @@ export async function submitReview(
 ): Promise<void> {
   const path = `repos/${owner}/${repo}/pulls/${pullNumber}/reviews`;
   await gh(["api", path, "--input", "-"], JSON.stringify(payload));
+}
+
+/** Open a URL in the default browser. */
+export function openInBrowser(url: string): void {
+  const cmd = Deno.build.os === "windows" ? "start" : Deno.build.os === "darwin" ? "open" : "xdg-open";
+  new Deno.Command(cmd, { args: [url] }).spawn();
+}
+
+/** Current GitHub user login (for comparing review ownership). */
+export async function getCurrentUserLogin(): Promise<string> {
+  const raw = await gh(["api", "user", "-q", ".login"]);
+  return raw.trim();
+}
+
+/** List all reviews for a PR (main review bodies). */
+export async function getPrReviews(
+  owner: string,
+  repo: string,
+  pullNumber: number
+): Promise<PrReview[]> {
+  const path = `repos/${owner}/${repo}/pulls/${pullNumber}/reviews`;
+  const raw = await gh(["api", path, "--paginate"]);
+  const data = JSON.parse(raw);
+  if (!Array.isArray(data)) return [];
+  return data.map((r: { id: number; body?: string | null; state?: string; user?: { login?: string } }) => ({
+    id: r.id,
+    body: r.body ?? null,
+    state: r.state ?? "",
+    user: r.user,
+  }));
+}
+
+/** If the given user has a pending review on this PR, return its id; otherwise null. */
+export async function getPendingReview(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  userLogin: string
+): Promise<{ id: number } | null> {
+  const reviews = await getPrReviews(owner, repo, pullNumber);
+  const pending = reviews.find((r) => r.state === "PENDING" && r.user?.login === userLogin);
+  return pending ? { id: pending.id } : null;
+}
+
+/** Delete a pending (draft) review. Use before posting a new draft if replacing. */
+export async function deletePendingReview(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  reviewId: number
+): Promise<void> {
+  const path = `repos/${owner}/${repo}/pulls/${pullNumber}/reviews/${reviewId}`;
+  await gh(["api", path, "-X", "DELETE"]);
+}
+
+/** Fill userHasPendingReview and pendingReviewId for each PR. Mutates items in place. Batched. */
+export async function fetchPendingReviewStatus(
+  prs: PRListItem[],
+  currentUserLogin: string,
+  batchSize = 8
+): Promise<void> {
+  const withRepo = prs.filter((p) => p.repository?.nameWithOwner);
+  for (let i = 0; i < withRepo.length; i += batchSize) {
+    const batch = withRepo.slice(i, i + batchSize);
+    await Promise.all(
+      batch.map(async (p) => {
+        const repo = p.repository!.nameWithOwner;
+        const [owner, repoName] = repo.split("/");
+        try {
+          const pending = await getPendingReview(owner, repoName, p.number, currentUserLogin);
+          (p as PRListItem).userHasPendingReview = pending != null;
+          (p as PRListItem).pendingReviewId = pending?.id;
+        } catch {
+          (p as PRListItem).userHasPendingReview = false;
+        }
+      })
+    );
+  }
+}
+
+/** List all review comments (inline) for a PR. */
+export async function getPrReviewComments(
+  owner: string,
+  repo: string,
+  pullNumber: number
+): Promise<PrReviewComment[]> {
+  const path = `repos/${owner}/${repo}/pulls/${pullNumber}/comments`;
+  const raw = await gh(["api", path, "--paginate"]);
+  const data = JSON.parse(raw);
+  if (!Array.isArray(data)) return [];
+  return data.map(
+    (c: {
+      id: number;
+      body?: string;
+      path?: string;
+      line?: number | null;
+      side?: string;
+      diff_hunk?: string;
+      in_reply_to_id?: number | null;
+      user?: { login?: string };
+    }) => ({
+      id: c.id,
+      body: c.body ?? "",
+      path: c.path ?? "",
+      line: c.line ?? null,
+      side: c.side === "LEFT" || c.side === "RIGHT" ? c.side : undefined,
+      diff_hunk: c.diff_hunk,
+      in_reply_to_id: c.in_reply_to_id ?? null,
+      user: c.user,
+    })
+  );
+}
+
+/** True if the PR has any review body or inline comments (something to address). */
+export async function prHasReviewFeedback(
+  owner: string,
+  repo: string,
+  pullNumber: number
+): Promise<boolean> {
+  const [reviews, comments] = await Promise.all([
+    getPrReviews(owner, repo, pullNumber),
+    getPrReviewComments(owner, repo, pullNumber),
+  ]);
+  return (
+    reviews.some((r) => (r.body ?? "").trim().length > 0) || comments.length > 0
+  );
+}
+
+/** List my PRs only, with section = fixes_has_feedback (has review feedback) or fixes_other. */
+export async function listMyPrsForFixes(): Promise<PRListItem[]> {
+  const myPrs = await listPrsViaSearchSection("my_prs");
+  if (myPrs.length === 0) return [];
+  await fetchPrSizes(myPrs);
+  const withSection = await Promise.all(
+    myPrs.map(async (p) => {
+      const repo = p.repository?.nameWithOwner;
+      if (!repo) return { ...p, section: "fixes_other" as const };
+      const [owner, repoName] = repo.split("/");
+      const hasFeedback = await prHasReviewFeedback(owner, repoName, p.number);
+      const section: "fixes_has_feedback" | "fixes_other" = hasFeedback
+        ? "fixes_has_feedback"
+        : "fixes_other";
+      return { ...p, section };
+    })
+  );
+  return withSection;
+}
+
+/** Reply to a top-level review comment. */
+export async function replyToReviewComment(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  commentId: number,
+  body: string
+): Promise<void> {
+  const path = `repos/${owner}/${repo}/pulls/${pullNumber}/comments/${commentId}/replies`;
+  await gh(["api", path, "-X", "POST", "--input", "-"], JSON.stringify({ body }));
 }

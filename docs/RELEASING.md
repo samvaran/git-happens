@@ -1,60 +1,119 @@
-# Versioning and releasing
+# Releasing a new version
 
-## Where the version lives
+## Exact process (what actually happens)
 
-- **Single source of truth:** `deno.json` → `"version": "1.0.0"`.
-- **In the binary:** `src/version.ts` is generated from that (so the compiled CLI can show `--version`). It’s updated automatically when you run `deno task compile` or `deno task compile:all`, or manually with `deno task sync-version`.
+A release is a **version bump + commit + tag + push**. After you push the tag, GitHub Actions does the rest (build, publish release, update Homebrew tap).
 
-Use **semver** (e.g. `1.0.0`, `1.1.0`, `2.0.0`). Bump in `deno.json` only; then sync and build.
+| Step | Who does it | What happens |
+|------|-------------|--------------|
+| 1. Set new version | You (or automation) | `deno.json` and `src/version.ts` get the new version (e.g. `1.2.0`). |
+| 2. Commit | You (or automation) | Commit `deno.json` and `src/version.ts` with message like `Release v1.2.0`. |
+| 3. Tag | You (or automation) | Create tag `v1.2.0` pointing at that commit. |
+| 4. Push branch + tag | You (or automation) | `git push origin main` and `git push origin v1.2.0`. |
+| 5. Build & release | **Release workflow** | Runs on tag push: builds all binaries, creates GitHub Release, uploads `dist/*`. |
+| 6. Update Homebrew | **release-tap workflow** | Runs on release published: updates Formula in your tap (version + sha256). |
 
----
-
-## What’s automated (config in this repo)
-
-| Step | Automated? | How |
-|------|------------|-----|
-| **Lint / format** | Yes | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) on push and PRs: `deno lint`, `deno fmt --check`. |
-| **Build binaries** | Yes | Triggered by pushing a tag `v*`. |
-| **Create GitHub Release** | Yes | Same workflow: builds with `deno task compile:all`, then creates the release and uploads all `dist/*` assets. |
-| **Version bump** | No | You edit `deno.json` and commit. |
-| **Tag and push** | No | You run `git tag v1.0.0` and `git push origin v1.0.0`. |
-| **Homebrew tap** | Yes (optional) | [`.github/workflows/release-tap.yml`](../.github/workflows/release-tap.yml): on release published, updates the Formula in your tap (version + sha256). Requires secret `TAP_PAT`; see [docs/homebrew/README.md](homebrew/README.md). |
-
-So with the workflows in this repo you only need to: **bump version in `deno.json`**, **commit**, **tag** (e.g. `v1.1.0`), and **push the tag**. CI runs on every push/PR; the release workflow runs on tag push and does build + release + upload.
+You only need to do steps 1–4. Steps 5–6 run in CI.
 
 ---
 
-## Releasing a new version (manual steps)
+## Manual process (by hand)
 
-1. **Bump version** in `deno.json` (e.g. `1.0.0` → `1.1.0`).
+```bash
+# 1. Bump version (edit deno.json to e.g. "1.2.0", then sync)
+deno task sync-version
 
-2. **Sync and commit** (so the tag has the right version in tree):
-   ```bash
-   deno task sync-version
-   git add deno.json src/version.ts
-   git commit -m "Release v1.1.0"
-   ```
+# 2. Commit
+git add deno.json src/version.ts
+git commit -m "Release v1.2.0"
 
-3. **Tag and push** (this triggers the release workflow):
-   ```bash
-   git tag v1.1.0
-   git push origin main
-   git push origin v1.1.0
-   ```
+# 3. Tag
+git tag v1.2.0
 
-4. The **release workflow** (`.github/workflows/release.yml`) will:
-   - Check out the tag
-   - Run `deno task compile:all` (versioned binaries in `dist/`)
-   - Create a GitHub Release for that tag with generated release notes
-   - Upload all `dist/*` binaries as release assets
+# 4. Push (replace main with your branch if different)
+git push origin main
+git push origin v1.2.0
+```
 
-5. **Homebrew tap:** If you set the `TAP_PAT` secret (token with write access to your tap repo), the [release-tap workflow](../.github/workflows/release-tap.yml) runs when a release is published. It clones your tap, updates `Formula/git-happens.rb` (version + sha256 of the source tarball), and pushes. One-time setup: create the tap repo, add the Formula from [docs/homebrew/Formula-git-happens.rb](homebrew/Formula-git-happens.rb), add `TAP_PAT`, and optionally set the `TAP_REPO` variable if your tap isn’t `{owner}/homebrew-tap`. See [docs/homebrew/README.md](homebrew/README.md).
+After step 4, the **Release** and **release-tap** workflows run automatically.
+
+---
+
+## Automated options
+
+### Option A: Local one-liner (recommended)
+
+Use the **release** script to do steps 1–4 in one go. You can push immediately or review first.
+
+```bash
+# Bump to a specific version (or use patch / minor / major), commit, tag. No push yet.
+deno task release -- 1.2.0
+
+# Then push when ready:
+git push origin main && git push origin v1.2.0
+```
+
+Or do it all in one shot:
+
+```bash
+# Bump patch (e.g. 1.2.0 -> 1.2.1), commit, tag, and push. Release + tap run in CI.
+deno task release -- patch --push
+```
+
+**Tasks:**
+
+- `deno task bump -- <version|patch|minor|major>` — only updates `deno.json` and `src/version.ts` (no git).
+- `deno task release -- <version|patch|minor|major> [--push]` — bump + commit + tag; add `--push` to push and trigger the release.
+
+### Option B: Bump only (then you git yourself)
+
+```bash
+deno task bump -- minor    # 1.2.0 -> 1.3.0
+# or
+deno task bump -- 2.0.0   # exact version
+
+git add deno.json src/version.ts
+git commit -m "Release vX.Y.Z"
+git tag vX.Y.Z
+git push origin main && git push origin vX.Y.Z
+```
+
+### Option C: Release from GitHub (no local git)
+
+If you prefer not to run git locally:
+
+1. Open the repo on GitHub → **Actions**.
+2. Select **Prepare release** in the left sidebar.
+3. Click **Run workflow**.
+4. Enter a version: either exact (e.g. `1.2.0`) or bump type (`patch`, `minor`, `major`).
+5. Run the workflow.
+
+It will bump, commit, tag, and push from the default branch. That triggers the **Release** workflow (build + publish) and then **release-tap** (Homebrew).
+
+---
+
+## What’s automated in CI (no extra work)
+
+| Step | Workflow | When |
+|------|----------|------|
+| Lint / format | `ci.yml` | Every push and PR |
+| Build binaries | `release.yml` | On push of tag `v*` |
+| Create GitHub Release + upload assets | `release.yml` | Same run as above |
+| Update Homebrew Formula (version + sha256) | `release-tap.yml` | When a release is published (needs `TAP_PAT` set) |
+
+---
 
 ## Quick reference
 
-| Step | What to do |
-|------|------------|
-| Bump | Edit `version` in `deno.json`. |
-| Sync + commit | `deno task sync-version`, then `git add deno.json src/version.ts` and commit. |
-| Release | `git tag v1.1.0` and `git push origin v1.1.0` → workflow builds and publishes. |
-| Homebrew | Automatic if `TAP_PAT` is set; else update Formula in tap by hand. See [docs/homebrew/README.md](homebrew/README.md). |
+| Goal | Command |
+|------|--------|
+| Bump and push a patch release | `deno task release -- patch --push` |
+| Bump to exact version, then push yourself | `deno task release -- 1.2.0` then `git push origin main && git push origin v1.2.0` |
+| Only bump (no commit) | `deno task bump -- minor` |
+| Release from GitHub UI | Actions → Prepare release → Run workflow → enter version |
+
+---
+
+## Homebrew tap
+
+If the repo has **TAP_PAT** (and optionally **TAP_REPO**) configured, the **release-tap** workflow updates your Homebrew Formula when a release is published. One-time setup: [docs/homebrew/README.md](homebrew/README.md).

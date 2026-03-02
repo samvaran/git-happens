@@ -41,6 +41,8 @@ const SECTION_LABELS: Record<PRListItem["section"] & string, string> = {
   review_requested: "Review requested",
   open_other: "Open (not assigned to you)",
   my_prs: "Your PRs",
+  fixes_has_feedback: "Has review feedback (waiting for you)",
+  fixes_other: "Your other open PRs",
 };
 
 function wrapLines(text: string, width: number): string[] {
@@ -63,6 +65,8 @@ function wrapLines(text: string, width: number): string[] {
 
 const SIZE_WIDTH = 14;
 const AUTHOR_WIDTH = 18;
+/** Spaces between columns (size | author | title). */
+const COL_GAP = 3;
 
 function sizeStr(p: PRListItem): string {
   if (p.additions != null && p.deletions != null) {
@@ -74,6 +78,7 @@ function sizeStr(p: PRListItem): string {
 type VisualLine =
   | { type: "repo"; text: string }
   | { type: "header"; text: string }
+  | { type: "blank" }
   | { type: "pr"; text: string; prIndex: number };
 
 function buildVisualLines(list: PRListItem[], columns: number): { lines: VisualLine[]; prFirstLine: number[] } {
@@ -81,7 +86,12 @@ function buildVisualLines(list: PRListItem[], columns: number): { lines: VisualL
   const prFirstLine: number[] = [];
   let lastRepo: string | undefined;
   let lastSection: PRListItem["section"] = undefined;
-  const titleWidth = Math.max(10, columns - 2 - SIZE_WIDTH - AUTHOR_WIDTH);
+  const titleWidth = Math.max(
+    10,
+    columns - 2 - SIZE_WIDTH - COL_GAP - AUTHOR_WIDTH - COL_GAP
+  );
+  const colSpacer = " ".repeat(COL_GAP);
+  const continuationIndent = SIZE_WIDTH + COL_GAP + AUTHOR_WIDTH + COL_GAP;
 
   for (let i = 0; i < list.length; i++) {
     const p = list[i];
@@ -89,30 +99,102 @@ function buildVisualLines(list: PRListItem[], columns: number): { lines: VisualL
     if (repo !== lastRepo) {
       lastRepo = repo;
       lastSection = undefined;
+      lines.push({ type: "blank" });
       lines.push({ type: "repo", text: `=== ${repo} ===` });
     }
     if (p.section !== lastSection && p.section) {
       lastSection = p.section;
       const label = SECTION_LABELS[p.section] ?? p.section;
+      lines.push({ type: "blank" });
       lines.push({ type: "header", text: `--- ${label} ---` });
     }
     prFirstLine.push(lines.length);
     const size = sizeStr(p).padEnd(SIZE_WIDTH);
     const author = (p.author.login ?? "?").slice(0, AUTHOR_WIDTH).padEnd(AUTHOR_WIDTH);
-    const titleLines = wrapLines(p.title, titleWidth);
+    const titleDisplay = p.userHasPendingReview ? `${p.title} [draft]` : p.title;
+    const titleLines = wrapLines(titleDisplay, titleWidth);
     for (let j = 0; j < titleLines.length; j++) {
-      const title = j === 0 ? titleLines[j] : " ".repeat(SIZE_WIDTH + AUTHOR_WIDTH) + titleLines[j];
-      lines.push({ type: "pr", text: size + author + title, prIndex: i });
+      const title =
+        j === 0
+          ? titleLines[j]
+          : " ".repeat(continuationIndent) + titleLines[j];
+      lines.push({
+        type: "pr",
+        text: size + colSpacer + author + colSpacer + title,
+        prIndex: i,
+      });
     }
   }
   return { lines, prFirstLine };
 }
 
+/**
+ * Print a PR list as a formatted table: grouped by repo, sorted by size within repo,
+ * columns size | author | title, with blank lines between sections (same style as picker).
+ */
+export function printPrTable(prs: PRListItem[]): void {
+  if (prs.length === 0) return;
+  const byRepo = new Map<string, PRListItem[]>();
+  for (const p of prs) {
+    const repo = p.repository?.nameWithOwner ?? "?";
+    if (!byRepo.has(repo)) byRepo.set(repo, []);
+    byRepo.get(repo)!.push(p);
+  }
+  for (const list of byRepo.values()) {
+    list.sort((a, b) => {
+      const sa = (a.additions ?? 0) + (a.deletions ?? 0);
+      const sb = (b.additions ?? 0) + (b.deletions ?? 0);
+      return sb - sa;
+    });
+  }
+  const repoOrder = [...byRepo.keys()].sort();
+  const columns = Deno.consoleSize().columns;
+  const titleWidth = Math.max(
+    10,
+    columns - 2 - SIZE_WIDTH - COL_GAP - AUTHOR_WIDTH - COL_GAP
+  );
+  const colSpacer = " ".repeat(COL_GAP);
+  const continuationIndent = SIZE_WIDTH + COL_GAP + AUTHOR_WIDTH + COL_GAP;
+
+  for (const repo of repoOrder) {
+    const list = byRepo.get(repo)!;
+    console.log("");
+    console.log(`=== ${repo} ===`);
+    for (const p of list) {
+      const size = sizeStr(p).padEnd(SIZE_WIDTH);
+      const author = (p.author.login ?? "?").slice(0, AUTHOR_WIDTH).padEnd(AUTHOR_WIDTH);
+      const titleDisplay = p.userHasPendingReview ? `${p.title} [draft]` : p.title;
+      const titleLines = wrapLines(titleDisplay, titleWidth);
+      for (let j = 0; j < titleLines.length; j++) {
+        const title =
+          j === 0
+            ? titleLines[j]
+            : " ".repeat(continuationIndent) + titleLines[j];
+        console.log(size + colSpacer + author + colSpacer + title);
+      }
+    }
+  }
+}
+
+/** Options for the PR picker (e.g. fixes mode: only my PRs with different sections). */
+export interface PickPrOptions {
+  /** When true, sections are fixes_has_feedback first, then fixes_other. */
+  fixesMode?: boolean;
+}
+
 /** Pick one PR from a list: grouped by repo, one set of section tables per repo, columns size | author | title. */
-export async function pickPr(prs: PRListItem[]): Promise<PRListItem | null> {
+export async function pickPr(
+  prs: PRListItem[],
+  opts: PickPrOptions = {}
+): Promise<PRListItem | null> {
   if (prs.length === 0) return null;
-  const sectionOrder = (s: PRListItem["section"]) =>
-    s === "assigned" ? 0 : s === "review_requested" ? 1 : s === "open_other" ? 2 : 3;
+  const { fixesMode = false } = opts;
+  const sectionOrder = (s: PRListItem["section"]) => {
+    if (fixesMode) {
+      return s === "fixes_has_feedback" ? 0 : s === "fixes_other" ? 1 : 2;
+    }
+    return s === "assigned" ? 0 : s === "review_requested" ? 1 : s === "open_other" ? 2 : 3;
+  };
   const byRepo = new Map<string, PRListItem[]>();
   for (const p of prs) {
     const repo = p.repository?.nameWithOwner ?? "?";
@@ -166,7 +248,9 @@ export async function pickPr(prs: PRListItem[]): Promise<PRListItem | null> {
     Deno.stdout.writeSync(new TextEncoder().encode(SGR.clear));
     for (let i = startRow; i < endRow; i++) {
       const line = lines[i];
-      if (line.type === "repo" || line.type === "header") {
+      if (line.type === "blank") {
+        console.log("");
+      } else if (line.type === "repo" || line.type === "header") {
         console.log(line.text);
       } else {
         const isSelected = line.prIndex === selectedIndex;
