@@ -32,19 +32,23 @@ just feeds it the diff and formats the reply for GitHub.
 **macOS / Linux (Homebrew):**
 
 ```bash
-brew tap samvaran/git-happens
+brew tap dvarka/git-happens
 brew install git-happens
 ```
 
-That’s it. Run `git-happens` from any directory.
+One-time tap, then install. Run `git-happens` from any directory.
 
 ---
 
-## Update
+## Upgrade
+
+To get the latest release:
 
 ```bash
-brew upgrade git-happens
+brew update && brew upgrade git-happens
 ```
+
+`brew update` refreshes the formula; `brew upgrade` installs the new version.
 
 ---
 
