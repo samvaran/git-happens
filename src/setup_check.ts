@@ -4,6 +4,7 @@
  */
 
 import type { AiBackend } from "./ai.ts";
+import { AI_CLI_COMMAND } from "./ai.ts";
 import {
   buildCardLines,
   cardWidth,
@@ -119,13 +120,14 @@ export async function checkGh(): Promise<GhCheckResult> {
   return { ok: true };
 }
 
-/** Check if an AI CLI binary is available (runs --version or --help). */
+/** Check if an AI CLI binary is available (runs --version or --help). Uses actual command (e.g. `agent` for Cursor). */
 export async function checkAiCli(backend: AiBackend): Promise<AiCheckResult> {
-  const result = await runWithTimeout(backend, ["--version"], CHECK_TIMEOUT_MS);
+  const command = AI_CLI_COMMAND[backend];
+  const result = await runWithTimeout(command, ["--version"], CHECK_TIMEOUT_MS);
   if (result.success) return { available: true };
   if (result.code === 127) return { available: false };
   const helpResult = await runWithTimeout(
-    backend,
+    command,
     ["--help"],
     CHECK_TIMEOUT_MS,
   );

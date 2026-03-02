@@ -69,6 +69,14 @@ export function buildPrompt(
 
 export type AiBackend = "claude" | "gemini" | "cursor" | "codex";
 
+/** Actual terminal command for each backend (Cursor uses `agent`, not `cursor`). */
+export const AI_CLI_COMMAND: Record<AiBackend, string> = {
+  claude: "claude",
+  gemini: "gemini",
+  cursor: "agent",
+  codex: "codex",
+};
+
 /** Token usage when the CLI reports it (e.g. on stderr or in JSON envelope). */
 export interface TokenUsage {
   input_tokens?: number;
@@ -180,99 +188,23 @@ function formatTokenUsage(u: TokenUsage): string {
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_MS = 80;
 
-/**
- * Run the AI CLI under a PTY (via Unix `script`) so it sees a TTY and may stream output.
- * Streams stdout to the terminal while buffering for parsing. Falls back to spinner if PTY unavailable.
- */
-async function runAiCliWithPty(
-  cli: string,
-  promptBytes: Uint8Array,
-): Promise<{ stdout: string; stderr: string; success: boolean }> {
-  const os = Deno.build.os;
-  if (os === "windows") {
-    return runAiCliWithSpinner(cli, promptBytes);
-  }
+/** CLI args to request "auto" model selection where supported (saves cost / picks best fit). */
+const MODEL_AUTO_ARGS: Record<AiBackend, string[]> = {
+  claude: ["--model", "auto"],
+  gemini: ["--model", "auto"],
+  cursor: ["--model", "auto"],
+  codex: [], // no standard auto flag found
+};
 
-  // script runs the child in a PTY so it gets line buffering. Linux: script -q -c "cli" /dev/null; macOS: script -q /dev/null cli
-  const scriptArgs = os === "darwin"
-    ? ["-q", "/dev/null", cli]
-    : ["-q", "-c", cli, "/dev/null"];
-
-  const cmd = new Deno.Command("script", {
-    args: scriptArgs,
-    stdin: "piped",
-    stdout: "piped",
-    stderr: "piped",
-  });
-  let proc: Deno.ChildProcess;
-  try {
-    proc = cmd.spawn();
-  } catch {
-    return runAiCliWithSpinner(cli, promptBytes);
-  }
-
-  const writer = proc.stdin.getWriter();
-  await writer.write(promptBytes);
-  await writer.close();
-
-  const stdoutChunks: string[] = [];
-  const stderrChunks: string[] = [];
-  const stdoutDecoder = new TextDecoder();
-  const stderrDecoder = new TextDecoder();
-  const encoder = new TextEncoder();
-
-  const readStdout = async () => {
-    const reader = proc.stdout.getReader();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value?.length) {
-          const text = stdoutDecoder.decode(value, { stream: true });
-          stdoutChunks.push(text);
-          Deno.stdout.writeSync(encoder.encode(text));
-        }
-      }
-      stdoutChunks.push(stdoutDecoder.decode());
-    } finally {
-      reader.releaseLock();
-    }
-  };
-
-  const readStderr = async () => {
-    const reader = proc.stderr.getReader();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value?.length) {
-          const text = stderrDecoder.decode(value, { stream: true });
-          stderrChunks.push(text);
-          Deno.stderr.writeSync(encoder.encode(text));
-        }
-      }
-      stderrChunks.push(stderrDecoder.decode());
-    } finally {
-      reader.releaseLock();
-    }
-  };
-
-  await Promise.all([readStdout(), readStderr()]);
-  const status = await proc.status;
-  return {
-    stdout: stdoutChunks.join(""),
-    stderr: stderrChunks.join(""),
-    success: status.success,
-  };
-}
-
-/** Run the AI CLI with pipes only (no PTY). Shows a loading spinner while waiting. */
+/** Run the AI CLI with pipes; shows a loading spinner. Uses model=auto when the CLI supports it. */
 async function runAiCliWithSpinner(
-  cli: string,
   promptBytes: Uint8Array,
+  backend: AiBackend,
 ): Promise<{ stdout: string; stderr: string; success: boolean }> {
-  const cmd = new Deno.Command(cli, {
-    args: [],
+  const command = AI_CLI_COMMAND[backend];
+  const args = MODEL_AUTO_ARGS[backend] ?? [];
+  const cmd = new Deno.Command(command, {
+    args,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -289,7 +221,7 @@ async function runAiCliWithSpinner(
 
   let spinnerRunning = true;
   let frameIndex = 0;
-  const label = `Waiting for ${cli}...`;
+  const label = `Waiting for ${backend}...`;
   const encoder = new TextEncoder();
 
   const spinnerLoop = async () => {
@@ -372,10 +304,10 @@ export async function runReview(
     log(
       `  → Sending prompt (${
         (new TextEncoder().encode(prompt).length / 1024).toFixed(1)
-      } KB) to ${cli} (streaming when possible)...`,
+      } KB) to ${cli}...`,
     );
     const promptBytes = new TextEncoder().encode(prompt);
-    const result = await runAiCliWithPty(cli, promptBytes);
+    const result = await runAiCliWithSpinner(promptBytes, backend);
     const out = result.stdout;
     const err = result.stderr;
     if (!result.success && err) {
@@ -530,10 +462,10 @@ export async function runFixes(
     log(
       `  → Sending fixes prompt (${
         (new TextEncoder().encode(prompt).length / 1024).toFixed(1)
-      } KB) to ${cli} (streaming when possible)...`,
+      } KB) to ${cli}...`,
     );
     const promptBytes = new TextEncoder().encode(prompt);
-    const result = await runAiCliWithPty(cli, promptBytes);
+    const result = await runAiCliWithSpinner(promptBytes, backend);
     const out = result.stdout;
     const err = result.stderr;
     if (!result.success && err) {

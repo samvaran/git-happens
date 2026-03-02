@@ -91,11 +91,11 @@ what’s happening.
   `input_tokens` / `output_tokens` or “X tokens”), the app parses it and shows a
   line like `Token usage: 1,234 in / 567 out (from CLI stderr)`. Not all CLIs
   report this; when they do, it appears after the review or fixes run.
-- **Streaming:** On macOS and Linux the app runs the AI CLI under a PTY (via the
-  system `script` command) so the CLI sees a TTY and may stream output as it’s
-  generated. On Windows, or if `script` isn’t available, a loading spinner is
-  shown instead. Streaming depends on the CLI actually flushing when attached to
-  a TTY.
+- **Model:** The app passes `--model auto` to Claude, Gemini, and Cursor when
+  available so the CLI can pick the best model for the task. Codex has no
+  auto flag; use its config if you want to change model.
+- **Loading:** A spinner is shown while the AI runs; output is read when the
+  CLI finishes.
 
 ## Docs
 
