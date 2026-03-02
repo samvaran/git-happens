@@ -154,7 +154,7 @@ export async function fetchPrSizes(prs: PRListItem[], batchSize = 10): Promise<v
 export async function getDiff(prNumber: number, repo?: string): Promise<string> {
   const args = ["pr", "diff", String(prNumber)];
   if (repo) args.push("-R", repo);
-  return gh(args);
+  return await gh(args);
 }
 
 /** Get PR title and body for the prompt (optional). */
