@@ -7,6 +7,12 @@ name: Update Homebrew tap
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to update in tap (e.g. 0.0.1); only used when run manually"
+        required: true
+        type: string
 
 jobs:
   tap:
@@ -16,7 +22,11 @@ jobs:
       - name: Set version and tarball URL
         id: meta
         run: |
-          TAG="${{ github.event.release.tag_name }}"
+          if [ -n "${{ github.event.release.tag_name }}" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            TAG="v${{ github.event.inputs.version }}"
+          fi
           VERSION="${TAG#v}"
           TARBALL_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT

@@ -5,7 +5,7 @@
 class GitHappens < Formula
   desc "AI-powered PR reviews from the CLI"
   homepage "https://github.com/YOUR_GITHUB_ORG/YOUR_REPO"
-  version "1.0.0"
+  version "0.0.1"
   url "https://github.com/YOUR_GITHUB_ORG/YOUR_REPO/archive/refs/tags/v#{version}.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
