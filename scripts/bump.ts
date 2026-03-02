@@ -15,7 +15,9 @@ if (!arg) {
   Deno.exit(1);
 }
 
-const j = JSON.parse(await Deno.readTextFile(denoJsonPath)) as { version?: string };
+const j = JSON.parse(await Deno.readTextFile(denoJsonPath)) as {
+  version?: string;
+};
 const current = j.version ?? "0.0.0";
 
 function nextVersion(bump: string): string {
@@ -33,7 +35,9 @@ function nextVersion(bump: string): string {
   }
 }
 
-const version = /^(patch|minor|major)$/i.test(arg) ? nextVersion(arg.toLowerCase()) : arg;
+const version = /^(patch|minor|major)$/i.test(arg)
+  ? nextVersion(arg.toLowerCase())
+  : arg;
 
 // basic semver check
 if (!/^\d+\.\d+\.\d+(-[\w.]+)?(\+[\w.]+)?$/.test(version)) {
@@ -45,7 +49,8 @@ j.version = version;
 await Deno.writeTextFile(denoJsonPath, JSON.stringify(j, null, 2) + "\n");
 
 // sync to src/version.ts
-const versionTs = `/** Synced from deno.json by scripts/compile.ts (or deno task sync-version). Single source of truth: deno.json "version". */
+const versionTs =
+  `/** Synced from deno.json by scripts/compile.ts (or deno task sync-version). Single source of truth: deno.json "version". */
 export const VERSION = "${version}";
 `;
 await Deno.writeTextFile(`${root}src/version.ts`, versionTs);

@@ -21,9 +21,12 @@ const root = new URL("..", import.meta.url).pathname;
 
 async function syncVersion(): Promise<string> {
   const denoJsonPath = `${root}deno.json`;
-  const j = JSON.parse(await Deno.readTextFile(denoJsonPath)) as { version?: string };
+  const j = JSON.parse(await Deno.readTextFile(denoJsonPath)) as {
+    version?: string;
+  };
   const version = j.version ?? "0.0.0";
-  const versionTs = `/** Synced from deno.json by scripts/compile.ts (or deno task sync-version). Single source of truth: deno.json "version". */
+  const versionTs =
+    `/** Synced from deno.json by scripts/compile.ts (or deno task sync-version). Single source of truth: deno.json "version". */
 export const VERSION = "${version}";
 `;
   await Deno.writeTextFile(`${root}src/version.ts`, versionTs);
@@ -31,7 +34,9 @@ export const VERSION = "${version}";
 }
 
 const entry = "src/main.ts";
-const defaultOut = Deno.build.os === "windows" ? "git-happens.exe" : "git-happens";
+const defaultOut = Deno.build.os === "windows"
+  ? "git-happens.exe"
+  : "git-happens";
 
 async function compileOne(target?: string, out?: string): Promise<boolean> {
   const args = [

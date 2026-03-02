@@ -86,7 +86,7 @@ export interface FixesResult {
   /** Unified diff to apply (e.g. from `diff -u` or AI-generated). */
   diff: string;
   /** Brief reply for each top-level comment (key = comment id as number or string). */
-  comment_replies?: Array< { comment_id: number; body: string } >;
+  comment_replies?: Array<{ comment_id: number; body: string }>;
   /** Optional commit message; otherwise we use a default. */
   commit_message?: string;
 }

@@ -1,6 +1,12 @@
-import type { FixesResult, PrReview, PrReviewComment, ReviewResult } from "./types.ts";
+import type {
+  FixesResult,
+  PrReview,
+  PrReviewComment,
+  ReviewResult,
+} from "./types.ts";
 
-const DEFAULT_PROMPT = `You're doing code review for a teammate. Your review gets posted to GitHub. Sound like a direct, thoughtful human — no corporate speak, no filler, no "as an AI". Every comment should earn its place.
+const DEFAULT_PROMPT =
+  `You're doing code review for a teammate. Your review gets posted to GitHub. Sound like a direct, thoughtful human — no corporate speak, no filler, no "as an AI". Every comment should earn its place.
 
 ## Your process
 
@@ -46,7 +52,11 @@ Return a single JSON object, nothing else:
 - Output only the JSON.`;
 
 /** Build the prompt sent to the AI (PR context + diff). */
-export function buildPrompt(diff: string, prTitle?: string, prBody?: string): string {
+export function buildPrompt(
+  diff: string,
+  prTitle?: string,
+  prBody?: string,
+): string {
   const header = [
     prTitle && `# PR: ${prTitle}`,
     prBody && `## Description\n${prBody.slice(0, 2000)}`,
@@ -77,28 +87,44 @@ export function parseTokenUsage(stderr: string): TokenUsage | null {
   const s = stderr.trim();
 
   // JSON-style: "input_tokens": 123, "output_tokens": 456 (Anthropic-style)
-  const anthropic = s.match(/"input_tokens"\s*:\s*(\d+).*?"output_tokens"\s*:\s*(\d+)/s);
+  const anthropic = s.match(
+    /"input_tokens"\s*:\s*(\d+).*?"output_tokens"\s*:\s*(\d+)/s,
+  );
   if (anthropic) {
     const input = parseInt(anthropic[1], 10);
     const output = parseInt(anthropic[2], 10);
     if (!isNaN(input) && !isNaN(output)) {
-      return { input_tokens: input, output_tokens: output, total_tokens: input + output };
+      return {
+        input_tokens: input,
+        output_tokens: output,
+        total_tokens: input + output,
+      };
     }
   }
 
   // JSON-style: "prompt_tokens": 123, "completion_tokens": 456 (OpenAI-style)
-  const openai = s.match(/"prompt_tokens"\s*:\s*(\d+).*?"completion_tokens"\s*:\s*(\d+)/s);
+  const openai = s.match(
+    /"prompt_tokens"\s*:\s*(\d+).*?"completion_tokens"\s*:\s*(\d+)/s,
+  );
   if (openai) {
     const prompt = parseInt(openai[1], 10);
     const completion = parseInt(openai[2], 10);
     if (!isNaN(prompt) && !isNaN(completion)) {
-      return { input_tokens: prompt, output_tokens: completion, total_tokens: prompt + completion };
+      return {
+        input_tokens: prompt,
+        output_tokens: completion,
+        total_tokens: prompt + completion,
+      };
     }
   }
 
   // "usage": { "input_tokens": N, "output_tokens": M }
-  const usageBlock = s.match(/"usage"\s*:\s*\{[^}]*"input_tokens"\s*:\s*(\d+)[^}]*"output_tokens"\s*:\s*(\d+)/s)
-    ?? s.match(/"usage"\s*:\s*\{[^}]*"output_tokens"\s*:\s*(\d+)[^}]*"input_tokens"\s*:\s*(\d+)/s);
+  const usageBlock = s.match(
+    /"usage"\s*:\s*\{[^}]*"input_tokens"\s*:\s*(\d+)[^}]*"output_tokens"\s*:\s*(\d+)/s,
+  ) ??
+    s.match(
+      /"usage"\s*:\s*\{[^}]*"output_tokens"\s*:\s*(\d+)[^}]*"input_tokens"\s*:\s*(\d+)/s,
+    );
   if (usageBlock) {
     const a = parseInt(usageBlock[1], 10);
     const b = parseInt(usageBlock[2], 10);
@@ -108,18 +134,25 @@ export function parseTokenUsage(stderr: string): TokenUsage | null {
   }
 
   // Plain text: "1234 input / 567 output" or "1234 tokens in, 567 out"
-  const inOut = s.match(/(\d+)\s*(?:input|prompt|in)[\s,/]*(\d+)\s*(?:output|completion|out)/i)
-    ?? s.match(/(\d+)\s*\/\s*(\d+)\s*tokens?/i);
+  const inOut = s.match(
+    /(\d+)\s*(?:input|prompt|in)[\s,/]*(\d+)\s*(?:output|completion|out)/i,
+  ) ??
+    s.match(/(\d+)\s*\/\s*(\d+)\s*tokens?/i);
   if (inOut) {
     const inN = parseInt(inOut[1], 10);
     const outN = parseInt(inOut[2], 10);
     if (!isNaN(inN) && !isNaN(outN)) {
-      return { input_tokens: inN, output_tokens: outN, total_tokens: inN + outN };
+      return {
+        input_tokens: inN,
+        output_tokens: outN,
+        total_tokens: inN + outN,
+      };
     }
   }
 
   // Single total: "Used 12345 tokens" or "tokens: 12345"
-  const total = s.match(/(?:used|tokens?)\s*:?\s*(\d+)/i) ?? s.match(/(\d+)\s*tokens?\s*(?:used|total)?/i);
+  const total = s.match(/(?:used|tokens?)\s*:?\s*(\d+)/i) ??
+    s.match(/(\d+)\s*tokens?\s*(?:used|total)?/i);
   if (total) {
     const n = parseInt(total[1], 10);
     if (!isNaN(n) && n < 1e7) {
@@ -132,8 +165,12 @@ export function parseTokenUsage(stderr: string): TokenUsage | null {
 
 function formatTokenUsage(u: TokenUsage): string {
   const parts: string[] = [];
-  if (u.input_tokens != null) parts.push(`${u.input_tokens.toLocaleString()} in`);
-  if (u.output_tokens != null) parts.push(`${u.output_tokens.toLocaleString()} out`);
+  if (u.input_tokens != null) {
+    parts.push(`${u.input_tokens.toLocaleString()} in`);
+  }
+  if (u.output_tokens != null) {
+    parts.push(`${u.output_tokens.toLocaleString()} out`);
+  }
   if (parts.length) return parts.join(" / ");
   if (u.total_tokens != null) return `${u.total_tokens.toLocaleString()} total`;
   if (u.raw) return u.raw.slice(0, 60);
@@ -157,10 +194,9 @@ async function runAiCliWithPty(
   }
 
   // script runs the child in a PTY so it gets line buffering. Linux: script -q -c "cli" /dev/null; macOS: script -q /dev/null cli
-  const scriptArgs =
-    os === "darwin"
-      ? ["-q", "/dev/null", cli]
-      : ["-q", "-c", cli, "/dev/null"];
+  const scriptArgs = os === "darwin"
+    ? ["-q", "/dev/null", cli]
+    : ["-q", "-c", cli, "/dev/null"];
 
   const cmd = new Deno.Command("script", {
     args: scriptArgs,
@@ -303,7 +339,9 @@ async function runAiCliWithSpinner(
   await Promise.all([readStdout(), readStderr()]);
   spinnerRunning = false;
   const status = await proc.status;
-  Deno.stdout.writeSync(encoder.encode("\r" + " ".repeat(label.length + 6) + "\r"));
+  Deno.stdout.writeSync(
+    encoder.encode("\r" + " ".repeat(label.length + 6) + "\r"),
+  );
   return {
     stdout: stdoutChunks.join(""),
     stderr: stderrChunks.join(""),
@@ -331,13 +369,21 @@ export async function runReview(
   const cli = backend;
 
   try {
-    log(`  → Sending prompt (${(new TextEncoder().encode(prompt).length / 1024).toFixed(1)} KB) to ${cli} (streaming when possible)...`);
+    log(
+      `  → Sending prompt (${
+        (new TextEncoder().encode(prompt).length / 1024).toFixed(1)
+      } KB) to ${cli} (streaming when possible)...`,
+    );
     const promptBytes = new TextEncoder().encode(prompt);
     const result = await runAiCliWithPty(cli, promptBytes);
     const out = result.stdout;
     const err = result.stderr;
     if (!result.success && err) {
-      log(`  → ${cli} stderr: ${err.slice(0, 500)}${err.length > 500 ? "..." : ""}`);
+      log(
+        `  → ${cli} stderr: ${err.slice(0, 500)}${
+          err.length > 500 ? "..." : ""
+        }`,
+      );
     }
     const usage = parseTokenUsage(err);
     if (usage) {
@@ -346,7 +392,11 @@ export async function runReview(
     log(`  → Parsing review (${out.length} chars)...`);
     const parsed = parseReviewJson(out);
     if (parsed) {
-      log(`  → Got review: verdict=${parsed.verdict}, ${parsed.inline_comments?.length ?? 0} inline comments.`);
+      log(
+        `  → Got review: verdict=${parsed.verdict}, ${
+          parsed.inline_comments?.length ?? 0
+        } inline comments.`,
+      );
       return parsed;
     }
   } catch (e) {
@@ -355,7 +405,8 @@ export async function runReview(
 
   // Stub when CLI missing or parse fails
   return {
-    summary: "*(No AI CLI returned valid JSON. Restart and pick an installed AI at the setup screen.)*",
+    summary:
+      "*(No AI CLI returned valid JSON. Restart and pick an installed AI at the setup screen.)*",
     verdict: "comment",
     inline_comments: [],
   };
@@ -386,7 +437,8 @@ function parseReviewJson(stdout: string): ReviewResult | null {
 
 // --- AI PR Fixes ---
 
-const FIXES_SYSTEM = `You are helping the PR author address review feedback. Your job: read each comment, verify it's still valid for the current code, then fix or address it. Think like a good engineer.
+const FIXES_SYSTEM =
+  `You are helping the PR author address review feedback. Your job: read each comment, verify it's still valid for the current code, then fix or address it. Think like a good engineer.
 
 ## Principles
 
@@ -427,7 +479,7 @@ export function buildFixesPrompt(
   reviews: PrReview[],
   comments: PrReviewComment[],
   prTitle?: string,
-  prBody?: string
+  prBody?: string,
 ): string {
   const topLevel = comments.filter((c) => c.in_reply_to_id == null);
   const parts: string[] = [FIXES_SYSTEM, "\n---\n\n"];
@@ -436,14 +488,22 @@ export function buildFixesPrompt(
   parts.push("## Reviews (main bodies)\n");
   for (const r of reviews) {
     if (r.body && r.body.trim()) {
-      parts.push(`- [review id=${r.id}] (${r.state}) ${(r.user?.login ?? "?")}: ${r.body.slice(0, 1500)}\n`);
+      parts.push(
+        `- [review id=${r.id}] (${r.state}) ${(r.user?.login ?? "?")}: ${
+          r.body.slice(0, 1500)
+        }\n`,
+      );
     }
   }
   parts.push("\n## Inline comments (with comment_id for replies)\n");
   for (const c of comments) {
-    const top = c.in_reply_to_id == null ? " [TOP-LEVEL — include a reply]" : "";
+    const top = c.in_reply_to_id == null
+      ? " [TOP-LEVEL — include a reply]"
+      : "";
     parts.push(
-      `- [comment_id=${c.id}]${top} path=${c.path} line=${c.line ?? "?"} side=${c.side ?? "RIGHT"}\n  ${(c.diff_hunk ?? "").replace(/\n/g, "\n  ")}\n  Body: ${c.body}\n`
+      `- [comment_id=${c.id}]${top} path=${c.path} line=${c.line ?? "?"} side=${
+        c.side ?? "RIGHT"
+      }\n  ${(c.diff_hunk ?? "").replace(/\n/g, "\n  ")}\n  Body: ${c.body}\n`,
     );
   }
   parts.push("\n## Current PR diff\n\n");
@@ -451,7 +511,7 @@ export function buildFixesPrompt(
   parts.push(diff);
   parts.push("\n```\n\n");
   parts.push(
-    `There are ${topLevel.length} top-level comment(s). Include a comment_reply for each (comment_id and body). Output only the JSON.\n`
+    `There are ${topLevel.length} top-level comment(s). Include a comment_reply for each (comment_id and body). Output only the JSON.\n`,
   );
   return parts.join("");
 }
@@ -463,17 +523,25 @@ export function buildFixesPrompt(
 export async function runFixes(
   prompt: string,
   backend: AiBackend = "claude",
-  log = (msg: string) => console.log(msg)
+  log = (msg: string) => console.log(msg),
 ): Promise<FixesResult> {
   const cli = backend;
   try {
-    log(`  → Sending fixes prompt (${(new TextEncoder().encode(prompt).length / 1024).toFixed(1)} KB) to ${cli} (streaming when possible)...`);
+    log(
+      `  → Sending fixes prompt (${
+        (new TextEncoder().encode(prompt).length / 1024).toFixed(1)
+      } KB) to ${cli} (streaming when possible)...`,
+    );
     const promptBytes = new TextEncoder().encode(prompt);
     const result = await runAiCliWithPty(cli, promptBytes);
     const out = result.stdout;
     const err = result.stderr;
     if (!result.success && err) {
-      log(`  → ${cli} stderr: ${err.slice(0, 500)}${err.length > 500 ? "..." : ""}`);
+      log(
+        `  → ${cli} stderr: ${err.slice(0, 500)}${
+          err.length > 500 ? "..." : ""
+        }`,
+      );
     }
     const usage = parseTokenUsage(err);
     if (usage) {
@@ -482,14 +550,19 @@ export async function runFixes(
     log(`  → Parsing fixes JSON...`);
     const parsed = parseFixesJson(out);
     if (parsed) {
-      log(`  → Got plan + diff (${parsed.diff.length} chars), ${parsed.comment_replies?.length ?? 0} comment replies.`);
+      log(
+        `  → Got plan + diff (${parsed.diff.length} chars), ${
+          parsed.comment_replies?.length ?? 0
+        } comment replies.`,
+      );
       return parsed;
     }
   } catch (e) {
     log(`  → AI CLI failed: ${e}`);
   }
   return {
-    plan: "AI did not return valid output. Restart and pick an installed AI at the setup screen.",
+    plan:
+      "AI did not return valid output. Restart and pick an installed AI at the setup screen.",
     diff: "",
     comment_replies: [],
   };
@@ -505,15 +578,19 @@ function parseFixesJson(stdout: string): FixesResult | null {
       const r = o as FixesResult;
       const replies = Array.isArray(r.comment_replies)
         ? r.comment_replies.filter(
-            (x): x is { comment_id: number; body: string } =>
-              typeof x === "object" && x !== null && typeof (x as { comment_id?: number }).comment_id === "number" && typeof (x as { body?: string }).body === "string"
-          )
+          (x): x is { comment_id: number; body: string } =>
+            typeof x === "object" && x !== null &&
+            typeof (x as { comment_id?: number }).comment_id === "number" &&
+            typeof (x as { body?: string }).body === "string",
+        )
         : [];
       return {
         plan: String(r.plan),
         diff: String(r.diff),
         comment_replies: replies,
-        commit_message: r.commit_message != null ? String(r.commit_message) : undefined,
+        commit_message: r.commit_message != null
+          ? String(r.commit_message)
+          : undefined,
       };
     }
   } catch {

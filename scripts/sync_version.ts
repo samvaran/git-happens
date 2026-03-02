@@ -3,7 +3,9 @@
  * Run when bumping: deno task sync-version
  */
 const root = new URL("..", import.meta.url).pathname;
-const j = JSON.parse(await Deno.readTextFile(`${root}deno.json`)) as { version?: string };
+const j = JSON.parse(await Deno.readTextFile(`${root}deno.json`)) as {
+  version?: string;
+};
 const version = j.version ?? "0.0.0";
 await Deno.writeTextFile(
   `${root}src/version.ts`,

@@ -16,14 +16,24 @@ type Key =
 function parseKey(buf: Uint8Array): Key | null {
   if (buf.length === 0) return null;
   if (buf[0] === 0x1b && buf.length >= 3 && buf[1] === 0x5b) {
-    const dir = buf[2] === 0x41 ? "up" : buf[2] === 0x42 ? "down" : buf[2] === 0x43 ? "right" : buf[2] === 0x44 ? "left" : null;
+    const dir = buf[2] === 0x41
+      ? "up"
+      : buf[2] === 0x42
+      ? "down"
+      : buf[2] === 0x43
+      ? "right"
+      : buf[2] === 0x44
+      ? "left"
+      : null;
     if (dir) return { type: "arrow", dir };
   }
   if (buf[0] === 0x1b && buf.length === 1) return { type: "escape" };
   if (buf[0] === 0x0d || buf[0] === 0x0a) return { type: "enter" };
   if (buf[0] === 0x7f || buf[0] === 0x08) return { type: "backspace" };
   const s = new TextDecoder().decode(buf);
-  if (s.length === 1 && /[a-zA-Z0-9\s.-_]/.test(s)) return { type: "char", char: s };
+  if (s.length === 1 && /[a-zA-Z0-9\s.-_]/.test(s)) {
+    return { type: "char", char: s };
+  }
   return null;
 }
 
@@ -81,14 +91,17 @@ type VisualLine =
   | { type: "blank" }
   | { type: "pr"; text: string; prIndex: number };
 
-function buildVisualLines(list: PRListItem[], columns: number): { lines: VisualLine[]; prFirstLine: number[] } {
+function buildVisualLines(
+  list: PRListItem[],
+  columns: number,
+): { lines: VisualLine[]; prFirstLine: number[] } {
   const lines: VisualLine[] = [];
   const prFirstLine: number[] = [];
   let lastRepo: string | undefined;
   let lastSection: PRListItem["section"] = undefined;
   const titleWidth = Math.max(
     10,
-    columns - 2 - SIZE_WIDTH - COL_GAP - AUTHOR_WIDTH - COL_GAP
+    columns - 2 - SIZE_WIDTH - COL_GAP - AUTHOR_WIDTH - COL_GAP,
   );
   const colSpacer = " ".repeat(COL_GAP);
   const continuationIndent = SIZE_WIDTH + COL_GAP + AUTHOR_WIDTH + COL_GAP;
@@ -110,14 +123,17 @@ function buildVisualLines(list: PRListItem[], columns: number): { lines: VisualL
     }
     prFirstLine.push(lines.length);
     const size = sizeStr(p).padEnd(SIZE_WIDTH);
-    const author = (p.author.login ?? "?").slice(0, AUTHOR_WIDTH).padEnd(AUTHOR_WIDTH);
-    const titleDisplay = p.userHasPendingReview ? `${p.title} [draft]` : p.title;
+    const author = (p.author.login ?? "?").slice(0, AUTHOR_WIDTH).padEnd(
+      AUTHOR_WIDTH,
+    );
+    const titleDisplay = p.userHasPendingReview
+      ? `${p.title} [draft]`
+      : p.title;
     const titleLines = wrapLines(titleDisplay, titleWidth);
     for (let j = 0; j < titleLines.length; j++) {
-      const title =
-        j === 0
-          ? titleLines[j]
-          : " ".repeat(continuationIndent) + titleLines[j];
+      const title = j === 0
+        ? titleLines[j]
+        : " ".repeat(continuationIndent) + titleLines[j];
       lines.push({
         type: "pr",
         text: size + colSpacer + author + colSpacer + title,
@@ -151,7 +167,7 @@ export function printPrTable(prs: PRListItem[]): void {
   const columns = Deno.consoleSize().columns;
   const titleWidth = Math.max(
     10,
-    columns - 2 - SIZE_WIDTH - COL_GAP - AUTHOR_WIDTH - COL_GAP
+    columns - 2 - SIZE_WIDTH - COL_GAP - AUTHOR_WIDTH - COL_GAP,
   );
   const colSpacer = " ".repeat(COL_GAP);
   const continuationIndent = SIZE_WIDTH + COL_GAP + AUTHOR_WIDTH + COL_GAP;
@@ -162,14 +178,17 @@ export function printPrTable(prs: PRListItem[]): void {
     console.log(`=== ${repo} ===`);
     for (const p of list) {
       const size = sizeStr(p).padEnd(SIZE_WIDTH);
-      const author = (p.author.login ?? "?").slice(0, AUTHOR_WIDTH).padEnd(AUTHOR_WIDTH);
-      const titleDisplay = p.userHasPendingReview ? `${p.title} [draft]` : p.title;
+      const author = (p.author.login ?? "?").slice(0, AUTHOR_WIDTH).padEnd(
+        AUTHOR_WIDTH,
+      );
+      const titleDisplay = p.userHasPendingReview
+        ? `${p.title} [draft]`
+        : p.title;
       const titleLines = wrapLines(titleDisplay, titleWidth);
       for (let j = 0; j < titleLines.length; j++) {
-        const title =
-          j === 0
-            ? titleLines[j]
-            : " ".repeat(continuationIndent) + titleLines[j];
+        const title = j === 0
+          ? titleLines[j]
+          : " ".repeat(continuationIndent) + titleLines[j];
         console.log(size + colSpacer + author + colSpacer + title);
       }
     }
@@ -185,7 +204,7 @@ export interface PickPrOptions {
 /** Pick one PR from a list: grouped by repo, one set of section tables per repo, columns size | author | title. */
 export async function pickPr(
   prs: PRListItem[],
-  opts: PickPrOptions = {}
+  opts: PickPrOptions = {},
 ): Promise<PRListItem | null> {
   if (prs.length === 0) return null;
   const { fixesMode = false } = opts;
@@ -193,7 +212,13 @@ export async function pickPr(
     if (fixesMode) {
       return s === "fixes_has_feedback" ? 0 : s === "fixes_other" ? 1 : 2;
     }
-    return s === "assigned" ? 0 : s === "review_requested" ? 1 : s === "open_other" ? 2 : 3;
+    return s === "assigned"
+      ? 0
+      : s === "review_requested"
+      ? 1
+      : s === "open_other"
+      ? 2
+      : 3;
   };
   const byRepo = new Map<string, PRListItem[]>();
   for (const p of prs) {
@@ -226,7 +251,7 @@ export async function pickPr(
         p.title.toLowerCase().includes(q) ||
         String(p.number).includes(q) ||
         p.author.login.toLowerCase().includes(q) ||
-        p.repository?.nameWithOwner?.toLowerCase().includes(q)
+        p.repository?.nameWithOwner?.toLowerCase().includes(q),
     );
   };
 
@@ -235,13 +260,15 @@ export async function pickPr(
 
   const render = () => {
     const list = filtered();
-    if (list.length > 0) selectedIndex = Math.min(selectedIndex, list.length - 1);
+    if (list.length > 0) {
+      selectedIndex = Math.min(selectedIndex, list.length - 1);
+    }
     const { lines, prFirstLine } = buildVisualLines(list, columns);
     const totalLines = lines.length;
     const firstLineOfSelected = prFirstLine[selectedIndex] ?? 0;
     const startRow = Math.min(
       Math.max(0, firstLineOfSelected - Math.floor(bodyRows / 2)),
-      Math.max(0, totalLines - bodyRows)
+      Math.max(0, totalLines - bodyRows),
     );
     const endRow = Math.min(startRow + bodyRows, totalLines);
 
@@ -254,7 +281,9 @@ export async function pickPr(
         console.log(line.text);
       } else {
         const isSelected = line.prIndex === selectedIndex;
-        console.log(isSelected ? SGR.reverse + line.text + SGR.reset : line.text);
+        console.log(
+          isSelected ? SGR.reverse + line.text + SGR.reset : line.text,
+        );
       }
     }
     console.log("");
@@ -266,7 +295,9 @@ export async function pickPr(
   try {
     for (;;) {
       const list = filtered();
-      if (list.length > 0) selectedIndex = Math.min(selectedIndex, list.length - 1);
+      if (list.length > 0) {
+        selectedIndex = Math.min(selectedIndex, list.length - 1);
+      }
       render();
 
       const key = await readKey();

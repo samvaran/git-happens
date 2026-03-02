@@ -6,11 +6,11 @@
 import type { AiBackend } from "./ai.ts";
 import { VERSION } from "./version.ts";
 import {
-  SGR,
-  FOOTER,
-  renderTutorialHeader,
   buildCardLines,
   cardWidth,
+  FOOTER,
+  renderTutorialHeader,
+  SGR,
 } from "./tutorial_ui.ts";
 
 export type AppMode = "review" | "fixes";
@@ -70,14 +70,18 @@ export interface SelectModeOptions {
 }
 
 /** Show the mode selector; returns selected mode or null on cancel. */
-export async function selectMode(opts: SelectModeOptions = {}): Promise<AppMode | null> {
+export async function selectMode(
+  opts: SelectModeOptions = {},
+): Promise<AppMode | null> {
   const { backend = "claude", stepLabel = "Step 2 of 2" } = opts;
   const { columns } = Deno.consoleSize();
   const width = cardWidth(columns);
   let selectedIndex = 0;
 
   const packageInfo = `git-happens v${VERSION}  ·  ${PACKAGE_LICENSE}`;
-  const aiInfo = `AI: ${AI_BACKEND_LABEL[backend]}  ·  restart to choose another`;
+  const aiInfo = `AI: ${
+    AI_BACKEND_LABEL[backend]
+  }  ·  restart to choose another`;
 
   const render = () => {
     const enc = new TextEncoder();
@@ -92,7 +96,12 @@ export async function selectMode(opts: SelectModeOptions = {}): Promise<AppMode 
     const margin = " ".repeat(Math.max(0, (columns - width) >> 1));
     for (let i = 0; i < MODES.length; i++) {
       const selected = i === selectedIndex;
-      const lines = buildCardLines(MODES[i].title, MODES[i].subtitle, width, selected);
+      const lines = buildCardLines(
+        MODES[i].title,
+        MODES[i].subtitle,
+        width,
+        selected,
+      );
       const style = selected ? SGR.reverse : "";
       for (const line of lines) {
         console.log(margin + style + line + SGR.reset);

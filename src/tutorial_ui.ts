@@ -26,7 +26,7 @@ export function renderTutorialHeader(
     step?: string;
     tagline?: string;
     extra?: string[];
-  } = {}
+  } = {},
 ): void {
   const { step, tagline, extra = [] } = options;
   const lineLen = Math.min(columns, 44);
@@ -35,7 +35,9 @@ export function renderTutorialHeader(
   console.log(center(SGR.bold + APP_TITLE + SGR.reset, columns));
   if (step) console.log(center(SGR.dim + step + SGR.reset, columns));
   if (tagline) console.log(center(SGR.dim + tagline + SGR.reset, columns));
-  for (const line of extra) console.log(center(SGR.dim + line + SGR.reset, columns));
+  for (const line of extra) {
+    console.log(center(SGR.dim + line + SGR.reset, columns));
+  }
   console.log(center(SGR.dim + sep + SGR.reset, columns));
   console.log("");
 }
@@ -63,7 +65,7 @@ export function buildCardLines(
   title: string,
   subtitle: string,
   width: number,
-  selected: boolean
+  selected: boolean,
 ): string[] {
   const inner = Math.max(20, width - 4);
   const contentWidth = inner - 4;
@@ -75,7 +77,7 @@ export function buildCardLines(
   const titleLine = v + "  " + title.padEnd(contentWidth) + "  " + v;
   const subtitleLines = wrapText(subtitle, contentWidth);
   const subLines = subtitleLines.map(
-    (line) => v + "  " + line.padEnd(contentWidth) + "  " + v
+    (line) => v + "  " + line.padEnd(contentWidth) + "  " + v,
   );
   return [top, titleLine, ...subLines, bot];
 }

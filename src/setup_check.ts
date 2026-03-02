@@ -5,11 +5,11 @@
 
 import type { AiBackend } from "./ai.ts";
 import {
-  SGR,
-  FOOTER,
-  renderTutorialHeader,
   buildCardLines,
   cardWidth,
+  FOOTER,
+  renderTutorialHeader,
+  SGR,
 } from "./tutorial_ui.ts";
 import { VERSION } from "./version.ts";
 
@@ -54,7 +54,7 @@ export interface SetupResult {
 async function runWithTimeout(
   command: string,
   args: string[],
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<{ success: boolean; code?: number; stderr?: string }> {
   try {
     const proc = new Deno.Command(command, {
@@ -124,7 +124,11 @@ export async function checkAiCli(backend: AiBackend): Promise<AiCheckResult> {
   const result = await runWithTimeout(backend, ["--version"], CHECK_TIMEOUT_MS);
   if (result.success) return { available: true };
   if (result.code === 127) return { available: false };
-  const helpResult = await runWithTimeout(backend, ["--help"], CHECK_TIMEOUT_MS);
+  const helpResult = await runWithTimeout(
+    backend,
+    ["--help"],
+    CHECK_TIMEOUT_MS,
+  );
   return { available: helpResult.success };
 }
 
@@ -147,18 +151,31 @@ export function getAvailableBackends(result: SetupResult): AiBackend[] {
   return AI_BACKENDS.filter((b) => result.ai[b].available);
 }
 
-const SGR_SETUP = { dim: "\x1b[2m", green: "\x1b[32m", red: "\x1b[31m", reset: "\x1b[0m", bold: "\x1b[1m" };
+const SGR_SETUP = {
+  dim: "\x1b[2m",
+  green: "\x1b[32m",
+  red: "\x1b[31m",
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+};
 
 /** Print setup status (gh + each AI) to the console. */
 export function printSetupStatus(result: SetupResult): void {
-  const ghTick = result.gh.ok ? SGR_SETUP.green + "✓" + SGR_SETUP.reset : SGR_SETUP.red + "✗" + SGR_SETUP.reset;
+  const ghTick = result.gh.ok
+    ? SGR_SETUP.green + "✓" + SGR_SETUP.reset
+    : SGR_SETUP.red + "✗" + SGR_SETUP.reset;
   const ghNote = !result.gh.ok && result.gh.error
-    ? "  " + SGR_SETUP.dim + (result.gh.error === "not_installed" ? "not installed" : "not logged in") + SGR_SETUP.reset
+    ? "  " + SGR_SETUP.dim + (result.gh.error === "not_installed"
+      ? "not installed"
+      : "not logged in") +
+      SGR_SETUP.reset
     : "";
   console.log(SGR_SETUP.bold + "Setup" + SGR_SETUP.reset);
   console.log("  gh (GitHub CLI):  " + ghTick + ghNote);
   for (const b of AI_BACKENDS) {
-    const a = result.ai[b].available ? SGR_SETUP.green + "✓" + SGR_SETUP.reset : SGR_SETUP.dim + "—" + SGR_SETUP.reset;
+    const a = result.ai[b].available
+      ? SGR_SETUP.green + "✓" + SGR_SETUP.reset
+      : SGR_SETUP.dim + "—" + SGR_SETUP.reset;
     console.log("  " + AI_LABELS[b].padEnd(14) + " " + a);
   }
   console.log("");
@@ -167,7 +184,9 @@ export function printSetupStatus(result: SetupResult): void {
 /** Print instructions when gh is missing or not authenticated, then exit. */
 export function printGhInstructionsAndExit(result: GhCheckResult): void {
   console.error("");
-  console.error(SGR_SETUP.bold + "GitHub CLI (gh) is required." + SGR_SETUP.reset);
+  console.error(
+    SGR_SETUP.bold + "GitHub CLI (gh) is required." + SGR_SETUP.reset,
+  );
   console.error("");
   console.error(result.message ?? "Run: gh auth login");
   console.error("");
@@ -180,10 +199,14 @@ export function printAiInstructionsAndExit(): void {
   console.error(SGR_SETUP.bold + "No AI CLI found." + SGR_SETUP.reset);
   console.error("");
   console.error("Install at least one and ensure it's in your PATH:");
-  console.error("  Claude:    https://claude.ai/install  or  brew install --cask claude-code");
+  console.error(
+    "  Claude:    https://claude.ai/install  or  brew install --cask claude-code",
+  );
   console.error("  Gemini:    https://github.com/google-gemini/gemini-cli");
   console.error("  Cursor:    https://cursor.com (includes CLI)");
-  console.error("  Codex:    npm install -g @openai/codex  or  brew install --cask codex");
+  console.error(
+    "  Codex:    npm install -g @openai/codex  or  brew install --cask codex",
+  );
   console.error("");
   Deno.exit(1);
 }
@@ -191,19 +214,25 @@ export function printAiInstructionsAndExit(): void {
 /** Choose which AI backend to use. If only one available, returns it. If multiple and TTY, shows tutorial-style selector. */
 export async function selectAiBackend(
   available: AiBackend[],
-  preferred?: AiBackend
+  preferred?: AiBackend,
 ): Promise<AiBackend> {
   if (available.length === 0) return "claude";
   if (available.length === 1) return available[0];
-  if (!Deno.stdin.isTerminal()) return preferred && available.includes(preferred) ? preferred : available[0];
+  if (!Deno.stdin.isTerminal()) {
+    return preferred && available.includes(preferred)
+      ? preferred
+      : available[0];
+  }
 
   let selectedIndex = Math.max(
     0,
-    preferred ? available.indexOf(preferred) : 0
+    preferred ? available.indexOf(preferred) : 0,
   );
   if (selectedIndex < 0) selectedIndex = 0;
 
-  function parseKey(buf: Uint8Array): "up" | "down" | "enter" | "escape" | null {
+  function parseKey(
+    buf: Uint8Array,
+  ): "up" | "down" | "enter" | "escape" | null {
     if (buf.length === 0) return null;
     if (buf[0] === 0x1b && buf.length >= 3 && buf[1] === 0x5b) {
       if (buf[2] === 0x41) return "up";
@@ -236,7 +265,12 @@ export async function selectAiBackend(
     for (let i = 0; i < available.length; i++) {
       const b = available[i];
       const selected = i === selectedIndex;
-      const lines = buildCardLines(AI_LABELS[b], AI_SUBTITLES[b], width, selected);
+      const lines = buildCardLines(
+        AI_LABELS[b],
+        AI_SUBTITLES[b],
+        width,
+        selected,
+      );
       const style = selected ? SGR.reverse : "";
       for (const line of lines) {
         console.log(margin + style + line + SGR.reset);
@@ -253,8 +287,13 @@ export async function selectAiBackend(
       const key = await readKey();
       if (key === "enter") return available[selectedIndex];
       if (key === "escape") return available[0];
-      if (key === "up") selectedIndex = (selectedIndex - 1 + available.length) % available.length;
-      if (key === "down") selectedIndex = (selectedIndex + 1) % available.length;
+      if (key === "up") {
+        selectedIndex = (selectedIndex - 1 + available.length) %
+          available.length;
+      }
+      if (key === "down") {
+        selectedIndex = (selectedIndex + 1) % available.length;
+      }
     }
   } finally {
     Deno.stdin.setRaw(false);
