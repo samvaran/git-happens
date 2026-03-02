@@ -1,6 +1,6 @@
 {
   "name": "git-happens",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "exports": "./src/main.ts",
   "tasks": {
     "run": "deno run --allow-read --allow-net --allow-run --allow-write src/main.ts",
