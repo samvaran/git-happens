@@ -1,7 +1,6 @@
-# After a release is published: update the Homebrew tap Formula (version + sha256 of source tarball).
-# Requires: repo secret TAP_PAT (token with write access to the tap repo).
-# Optional: repo variable TAP_REPO (e.g. "owner/homebrew-git-happens"). Defaults to "{owner}/homebrew-git-happens".
-# If TAP_PAT is not set, the workflow fails at the first step with a clear message.
+# Manual run: update the Homebrew tap Formula (version + 4 platform binary SHAs from GitHub Releases).
+# Requires: repo secret TAP_PAT. Optional: repo variable TAP_REPO.
+# Formula uses pre-built binaries; no Deno or compile on install.
 name: Update homebrew tap manually
 
 on:
@@ -10,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to update in tap (e.g. 0.0.1); only used when run manually"
+        description: "Version to update in tap (e.g. 0.0.2); only used when run manually"
         required: true
         type: string
 
@@ -27,8 +26,10 @@ jobs:
             exit 1
           fi
 
-      - name: Set version and tarball URL
+      - name: Set version and get binary SHA256s
         id: meta
+        env:
+          REPO: ${{ github.repository }}
         run: |
           if [ -n "${{ github.event.release.tag_name }}" ]; then
             TAG="${{ github.event.release.tag_name }}"
@@ -36,22 +37,22 @@ jobs:
             TAG="v${{ github.event.inputs.version }}"
           fi
           VERSION="${TAG#v}"
-          TARBALL_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "tarball_url=${TARBALL_URL}" >> $GITHUB_OUTPUT
-
-      - name: Get source tarball SHA256
-        id: sha
-        run: |
-          SHA256=$(curl -sL "${{ steps.meta.outputs.tarball_url }}" | shasum -a 256 | awk '{print $1}')
-          echo "sha256=${SHA256}" >> $GITHUB_OUTPUT
+          echo "sha_arm64_macos=$(curl -sL "${BASE}/git-happens-${VERSION}-arm64-macos" | shasum -a 256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "sha_x64_macos=$(curl -sL "${BASE}/git-happens-${VERSION}-x64-macos" | shasum -a 256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "sha_arm64_linux=$(curl -sL "${BASE}/git-happens-${VERSION}-arm64-linux" | shasum -a 256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "sha_x64_linux=$(curl -sL "${BASE}/git-happens-${VERSION}-x64-linux" | shasum -a 256 | awk '{print $1}')" >> $GITHUB_OUTPUT
 
       - name: Clone tap and update Formula
         env:
           TAP_REPO: ${{ vars.TAP_REPO }}
           TAP_PAT: ${{ secrets.TAP_PAT }}
           VERSION: ${{ steps.meta.outputs.version }}
-          SHA256: ${{ steps.sha.outputs.sha256 }}
+          SHA_ARM64_MACOS: ${{ steps.meta.outputs.sha_arm64_macos }}
+          SHA_X64_MACOS: ${{ steps.meta.outputs.sha_x64_macos }}
+          SHA_ARM64_LINUX: ${{ steps.meta.outputs.sha_arm64_linux }}
+          SHA_X64_LINUX: ${{ steps.meta.outputs.sha_x64_linux }}
         run: |
           TAP_REPO="${TAP_REPO:-$GITHUB_REPOSITORY_OWNER/homebrew-git-happens}"
           git config --global user.name "github-actions[bot]"
@@ -61,16 +62,19 @@ jobs:
 
           FORMULA="Formula/git-happens.rb"
           if [ ! -f "$FORMULA" ]; then
-            echo "::error::Formula not found: $FORMULA. Create it from docs/homebrew/Formula-git-happens.rb"
+            echo "::error::Formula not found: $FORMULA."
             exit 1
           fi
 
-          sed -i.bak "s/version \".*\"/version \"${VERSION}\"/" "$FORMULA"
-          sed -i.bak "s/sha256 \".*\"/sha256 \"${SHA256}\"/" "$FORMULA"
+          sed -i.bak "s/version \"[^\"]*\"/version \"${VERSION}\"/" "$FORMULA"
+          sed -i.bak "s/ARM64_MACOS_SHA/${SHA_ARM64_MACOS}/" "$FORMULA"
+          sed -i.bak "s/X64_MACOS_SHA/${SHA_X64_MACOS}/" "$FORMULA"
+          sed -i.bak "s/ARM64_LINUX_SHA/${SHA_ARM64_LINUX}/" "$FORMULA"
+          sed -i.bak "s/X64_LINUX_SHA/${SHA_X64_LINUX}/" "$FORMULA"
           rm -f "${FORMULA}.bak"
 
           if git diff --quiet; then
-            echo "No Formula changes (version/sha256 already up to date)."
+            echo "No Formula changes (version/SHAs already up to date)."
             exit 0
           fi
 

@@ -1,20 +1,40 @@
 # Copy this file to your Homebrew tap as Formula/git-happens.rb.
-# Replace YOUR_GITHUB_ORG and YOUR_REPO with your GitHub org/user and repo (e.g. myuser/git-happens).
-# The release-tap workflow updates only "version" and "sha256" when you publish a release.
-
+# Replace YOUR_GITHUB_ORG and YOUR_REPO with your GitHub user/org and repo (e.g. samvaran/git-happens).
+# The Release workflow's update-tap job sets version and the 4 platform SHAs (pre-built binaries; no Deno on install).
 class GitHappens < Formula
   desc "AI-powered PR reviews from the CLI"
   homepage "https://github.com/YOUR_GITHUB_ORG/YOUR_REPO"
-  version "0.0.1"
-  url "https://github.com/YOUR_GITHUB_ORG/YOUR_REPO/archive/refs/tags/v#{version}.tar.gz"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  version "0.0.2"
   license "MIT"
 
-  depends_on "deno"
+  on_macos do
+    on_arm do
+      url "https://github.com/YOUR_GITHUB_ORG/YOUR_REPO/releases/download/v#{version}/git-happens-#{version}-arm64-macos"
+      sha256 "ARM64_MACOS_SHA"
+    end
+    on_intel do
+      url "https://github.com/YOUR_GITHUB_ORG/YOUR_REPO/releases/download/v#{version}/git-happens-#{version}-x64-macos"
+      sha256 "X64_MACOS_SHA"
+    end
+  end
+  on_linux do
+    on_arm do
+      url "https://github.com/YOUR_GITHUB_ORG/YOUR_REPO/releases/download/v#{version}/git-happens-#{version}-arm64-linux"
+      sha256 "ARM64_LINUX_SHA"
+    end
+    on_intel do
+      url "https://github.com/YOUR_GITHUB_ORG/YOUR_REPO/releases/download/v#{version}/git-happens-#{version}-x64-linux"
+      sha256 "X64_LINUX_SHA"
+    end
+  end
 
   def install
-    system "deno", "task", "compile"
-    bin.install "git-happens"
+    suffix = if OS.mac?
+      Hardware::CPU.arm? ? "arm64-macos" : "x64-macos"
+    else
+      Hardware::CPU.arm? ? "arm64-linux" : "x64-linux"
+    end
+    bin.install "git-happens-#{version}-#{suffix}" => "git-happens"
   end
 
   test do

@@ -45,27 +45,29 @@ jobs:
             exit 1
           fi
 
-      - name: Set version and tarball URL
+      - name: Set version and get binary SHA256s
         id: meta
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
-          TARBALL_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "tarball_url=${TARBALL_URL}" >> $GITHUB_OUTPUT
-
-      - name: Get source tarball SHA256
-        id: sha
-        run: |
-          SHA256=$(curl -sL "${{ steps.meta.outputs.tarball_url }}" | shasum -a 256 | awk '{print $1}')
-          echo "sha256=${SHA256}" >> $GITHUB_OUTPUT
+          echo "sha_arm64_macos=$(curl -sL "${BASE}/git-happens-${VERSION}-arm64-macos" | shasum -a 256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "sha_x64_macos=$(curl -sL "${BASE}/git-happens-${VERSION}-x64-macos" | shasum -a 256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "sha_arm64_linux=$(curl -sL "${BASE}/git-happens-${VERSION}-arm64-linux" | shasum -a 256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "sha_x64_linux=$(curl -sL "${BASE}/git-happens-${VERSION}-x64-linux" | shasum -a 256 | awk '{print $1}')" >> $GITHUB_OUTPUT
 
       - name: Clone tap and update Formula
         env:
           TAP_REPO: ${{ vars.TAP_REPO }}
           TAP_PAT: ${{ secrets.TAP_PAT }}
           VERSION: ${{ steps.meta.outputs.version }}
-          SHA256: ${{ steps.sha.outputs.sha256 }}
+          SHA_ARM64_MACOS: ${{ steps.meta.outputs.sha_arm64_macos }}
+          SHA_X64_MACOS: ${{ steps.meta.outputs.sha_x64_macos }}
+          SHA_ARM64_LINUX: ${{ steps.meta.outputs.sha_arm64_linux }}
+          SHA_X64_LINUX: ${{ steps.meta.outputs.sha_x64_linux }}
         run: |
           TAP_REPO="${TAP_REPO:-$GITHUB_REPOSITORY_OWNER/homebrew-git-happens}"
           git config --global user.name "github-actions[bot]"
@@ -79,12 +81,15 @@ jobs:
             exit 1
           fi
 
-          sed -i.bak "s/version \".*\"/version \"${VERSION}\"/" "$FORMULA"
-          sed -i.bak "s/sha256 \".*\"/sha256 \"${SHA256}\"/" "$FORMULA"
+          sed -i.bak "s/version \"[^\"]*\"/version \"${VERSION}\"/" "$FORMULA"
+          sed -i.bak "s/ARM64_MACOS_SHA/${SHA_ARM64_MACOS}/" "$FORMULA"
+          sed -i.bak "s/X64_MACOS_SHA/${SHA_X64_MACOS}/" "$FORMULA"
+          sed -i.bak "s/ARM64_LINUX_SHA/${SHA_ARM64_LINUX}/" "$FORMULA"
+          sed -i.bak "s/X64_LINUX_SHA/${SHA_X64_LINUX}/" "$FORMULA"
           rm -f "${FORMULA}.bak"
 
           if git diff --quiet; then
-            echo "No Formula changes (version/sha256 already up to date)."
+            echo "No Formula changes (version/SHAs already up to date)."
             exit 0
           fi
 
