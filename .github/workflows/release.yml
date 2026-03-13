@@ -1,5 +1,6 @@
-# On push of a tag v* (e.g. v1.0.0): build all binaries and create a GitHub Release with assets.
-# You still: bump version in deno.json, commit, tag (e.g. git tag v1.0.0), push tag.
+# On push of a tag v* (e.g. v1.0.0): build all binaries, create GitHub Release, then update Homebrew tap.
+# The tap is updated in this workflow (not via release:published) because GitHub often doesn't
+# emit that event when the release is created by the same repo's workflow.
 name: Release
 
 on:
@@ -30,3 +31,64 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require TAP_PAT
+        env:
+          TAP_PAT: ${{ secrets.TAP_PAT }}
+        run: |
+          if [ -z "$TAP_PAT" ]; then
+            echo "::error::TAP_PAT secret is not set. Add it in repo Settings → Secrets to enable tap updates."
+            exit 1
+          fi
+
+      - name: Set version and tarball URL
+        id: meta
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          TARBALL_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tarball_url=${TARBALL_URL}" >> $GITHUB_OUTPUT
+
+      - name: Get source tarball SHA256
+        id: sha
+        run: |
+          SHA256=$(curl -sL "${{ steps.meta.outputs.tarball_url }}" | shasum -a 256 | awk '{print $1}')
+          echo "sha256=${SHA256}" >> $GITHUB_OUTPUT
+
+      - name: Clone tap and update Formula
+        env:
+          TAP_REPO: ${{ vars.TAP_REPO }}
+          TAP_PAT: ${{ secrets.TAP_PAT }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA256: ${{ steps.sha.outputs.sha256 }}
+        run: |
+          TAP_REPO="${TAP_REPO:-$GITHUB_REPOSITORY_OWNER/homebrew-git-happens}"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git clone "https://x-access-token:${TAP_PAT}@github.com/${TAP_REPO}.git" tap
+          cd tap
+
+          FORMULA="Formula/git-happens.rb"
+          if [ ! -f "$FORMULA" ]; then
+            echo "::error::Formula not found: $FORMULA."
+            exit 1
+          fi
+
+          sed -i.bak "s/version \".*\"/version \"${VERSION}\"/" "$FORMULA"
+          sed -i.bak "s/sha256 \".*\"/sha256 \"${SHA256}\"/" "$FORMULA"
+          rm -f "${FORMULA}.bak"
+
+          if git diff --quiet; then
+            echo "No Formula changes (version/sha256 already up to date)."
+            exit 0
+          fi
+
+          git add "$FORMULA"
+          git commit -m "git-happens ${VERSION}"
+          git push origin HEAD
+          echo "::notice::Tap updated: ${TAP_REPO} Formula/git-happens.rb -> v${VERSION}"

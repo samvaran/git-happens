@@ -2,7 +2,7 @@
 # Requires: repo secret TAP_PAT (token with write access to the tap repo).
 # Optional: repo variable TAP_REPO (e.g. "owner/homebrew-git-happens"). Defaults to "{owner}/homebrew-git-happens".
 # If TAP_PAT is not set, the workflow fails at the first step with a clear message.
-name: Update homebrew tap
+name: Update homebrew tap manually
 
 on:
   release:
