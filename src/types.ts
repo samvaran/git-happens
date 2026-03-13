@@ -80,13 +80,22 @@ export interface PrReviewComment {
   user?: { login?: string } | null;
 }
 
-/** AI output for the fixes flow: plan, patch, and replies to comments */
+/** AI output for the fixes flow: plan, patch, replies, and base PR comment */
 export interface FixesResult {
   plan: string;
   /** Unified diff to apply (e.g. from `diff -u` or AI-generated). */
   diff: string;
-  /** Brief reply for each top-level comment (key = comment id as number or string). */
+  /** Brief reply for each top-level inline comment. */
   comment_replies?: Array<{ comment_id: number; body: string }>;
   /** Optional commit message; otherwise we use a default. */
   commit_message?: string;
+  /** Draft body for the PR base comment to post after push (summarizes commit, addresses review bodies). */
+  base_comment?: string;
+}
+
+/** One issue/PR-level comment (not inline). From gh api .../issues/{n}/comments */
+export interface IssueComment {
+  id: number;
+  body: string;
+  user?: { login?: string } | null;
 }

@@ -1,5 +1,6 @@
 import type {
   FixesResult,
+  IssueComment,
   PrReview,
   PrReviewComment,
   ReviewResult,
@@ -48,14 +49,16 @@ Return a single JSON object, nothing else:
 }
 
 - \`side\`: "RIGHT" for a line in the new (head) version, "LEFT" for the old (base).
+- \`line\`: **File line number** (1-based), not the line index within the hunk. In the diff, a hunk header \`@@ -old_start,old_count +new_start,new_count @@\` means: on the RIGHT (new) side the first line is line \`new_start\`, then \`new_start+1\`, etc. Use that absolute line number so the comment attaches to the correct line on GitHub.
 - \`verdict\`: "request_changes" if any blockers; "approve" if it's good (with or without suggestions); "comment" if suggestions only, nothing blocking.
 - Output only the JSON.`;
 
-/** Build the prompt sent to the AI (PR context + diff). */
+/** Build the prompt sent to the AI (PR context + diff + optional full file context for changed files). */
 export function buildPrompt(
   diff: string,
   prTitle?: string,
   prBody?: string,
+  fileContext?: string,
 ): string {
   const header = [
     prTitle && `# PR: ${prTitle}`,
@@ -64,7 +67,13 @@ export function buildPrompt(
   ]
     .filter(Boolean)
     .join("\n");
-  return `${DEFAULT_PROMPT}\n\n---\n\n${header}\n\`\`\`diff\n${diff}\n\`\`\``;
+  let out =
+    `${DEFAULT_PROMPT}\n\n---\n\n${header}\n\`\`\`diff\n${diff}\n\`\`\``;
+  if (fileContext?.trim()) {
+    out +=
+      `\n\n## File context (full content of changed files at PR head, for context)\n\nUse this to see neighboring code and avoid wrong line numbers. Inline comment \`line\` must be the file line number (1-based).\n\n${fileContext}`;
+  }
+  return out;
 }
 
 export type AiBackend = "claude" | "gemini" | "cursor" | "codex";
@@ -399,17 +408,20 @@ Return a single JSON object, nothing else:
     { "comment_id": 123, "body": "Fixed by adding a null check." },
     { "comment_id": 124, "body": "Left as-is; the current approach is correct because …" }
   ],
-  "commit_message": "Optional. One line for the commit. Default: 'Address PR review feedback'"
+  "commit_message": "Optional. One line for the commit. Default: 'Address PR review feedback'",
+  "base_comment": "One short PR-level comment to post after pushing: what was done in this commit and any response to the reviewers' main review bodies."
 }
 
 - \`comment_id\`: use the id from the inline comment list (only include top-level comments).
-- \`diff\`: complete unified diff; no extra text before/after. Output only the JSON.`;
+- \`diff\`: complete unified diff; no extra text before/after.
+- \`base_comment\`: will be posted as a new PR comment after the commit is pushed; summarize the fix and address review bodies. Output only the JSON.`;
 
-/** Build the prompt for the fixes flow: reviews + comments + diff. */
+/** Build the prompt for the fixes flow: reviews + issue comments + inline comments + diff. */
 export function buildFixesPrompt(
   diff: string,
   reviews: PrReview[],
   comments: PrReviewComment[],
+  issueComments: IssueComment[],
   prTitle?: string,
   prBody?: string,
 ): string {
@@ -424,6 +436,14 @@ export function buildFixesPrompt(
         `- [review id=${r.id}] (${r.state}) ${(r.user?.login ?? "?")}: ${
           r.body.slice(0, 1500)
         }\n`,
+      );
+    }
+  }
+  if (issueComments.length > 0) {
+    parts.push("\n## PR / issue comments (general discussion)\n");
+    for (const ic of issueComments) {
+      parts.push(
+        `- [${ic.user?.login ?? "?"}]: ${ic.body.slice(0, 800)}\n`,
       );
     }
   }
@@ -443,9 +463,52 @@ export function buildFixesPrompt(
   parts.push(diff);
   parts.push("\n```\n\n");
   parts.push(
-    `There are ${topLevel.length} top-level comment(s). Include a comment_reply for each (comment_id and body). Output only the JSON.\n`,
+    `There are ${topLevel.length} top-level inline comment(s). Include a comment_reply for each (comment_id and body). Also include base_comment for the PR. Output only the JSON.\n`,
   );
   return parts.join("");
+}
+
+/** Build prompt for commit-failure retry: agent fixes the issue and returns a new diff. */
+export function buildCommitFixPrompt(failureOutput: string): string {
+  return `The previous commit failed. Fix the issues (e.g. lint errors, hook failures) and output a single JSON object:
+
+{
+  "diff": "Full unified diff (diff -u style) that fixes the problems. Apply on top of current working tree. Paths relative to repo root."
+}
+
+Output only the JSON. No other text.
+
+## Failure output
+
+\`\`\`
+${failureOutput.slice(0, 4000)}
+\`\`\`
+`;
+}
+
+/**
+ * Run AI to fix commit failure (lint/hook). Returns new diff to apply, or null.
+ */
+export async function runCommitFix(
+  failureOutput: string,
+  backend: AiBackend = "claude",
+  _log = (msg: string) => console.log(msg),
+): Promise<string | null> {
+  const prompt = buildCommitFixPrompt(failureOutput);
+  try {
+    const promptBytes = new TextEncoder().encode(prompt);
+    const result = await runAiCliWithSpinner(promptBytes, backend);
+    const trimmed = result.stdout.trim();
+    const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const o = JSON.parse(jsonMatch[0]) as { diff?: string };
+    if (o && typeof o.diff === "string" && o.diff.trim()) {
+      return o.diff.trim();
+    }
+  } catch {
+    // fall through
+  }
+  return null;
 }
 
 /**
@@ -522,6 +585,9 @@ function parseFixesJson(stdout: string): FixesResult | null {
         comment_replies: replies,
         commit_message: r.commit_message != null
           ? String(r.commit_message)
+          : undefined,
+        base_comment: r.base_comment != null && String(r.base_comment).trim()
+          ? String(r.base_comment).trim()
           : undefined,
       };
     }

@@ -1,24 +1,42 @@
 import type { AiBackend } from "./ai.ts";
-import { buildFixesPrompt, buildPrompt, runFixes, runReview } from "./ai.ts";
+import {
+  buildFixesPrompt,
+  buildPrompt,
+  runCommitFix,
+  runFixes,
+  runReview,
+} from "./ai.ts";
 import { Confirm } from "@cliffy/prompt/confirm";
 import { Select } from "@cliffy/prompt/select";
 import {
+  applyPatch,
+  createDraftReview,
   deletePendingReview,
   fetchPendingReviewStatus,
   fetchPrSizes,
-  getCurrentBranchPr,
+  getCurrentBranchName,
   getCurrentUserLogin,
   getDiff,
+  getDiffWithContext,
+  getPrHeadRefName,
   getPrHeadSha,
+  getPrIssueComments,
   getPrMeta,
   getPrReviewComments,
   getPrReviews,
   getRepo,
   getRepoRoot,
+  getReviewerLoginsFromReviews,
+  isProtectedBranch,
   listMyPrsForFixes,
   listPrsViaSearch,
   openInBrowser,
-  submitReview,
+  postPrIssueComment,
+  replyToReviewComment,
+  requestReviewers,
+  runGit,
+  runGitAllowFailure,
+  updateReviewBody,
 } from "./gh.ts";
 import type { AppMode } from "./mode_selector.ts";
 import { selectMode } from "./mode_selector.ts";
@@ -88,59 +106,62 @@ async function runFixesFlow(backend: AiBackend): Promise<void> {
     return;
   }
 
-  // Print list of PRs that were reviewed and sent back to you (read-only, same table style as review picker)
-  console.log(
-    "PRs with review feedback (navigate to the repo and run again to generate fixes):\n",
-  );
-  printPrTable(withFeedback);
-  console.log(
-    "— If you're already in one of these repos on the PR branch, we'll generate fixes below.",
-  );
-  console.log(
-    "  Otherwise, cd to the repo (and branch) above and run this again.\n",
-  );
+  console.log("Pick a PR to address (fixes flow):\n");
+  printPrTable(prs);
+  const pr = Deno.stdin.isTerminal()
+    ? await pickPr(prs, { fixesMode: true })
+    : (withFeedback[0] ?? prs[0]);
+  if (!pr) {
+    console.log("Cancelled.");
+    return;
+  }
 
-  const currentRepo = await getRepo();
+  const repo = pr.repository?.nameWithOwner
+    ? {
+      owner: pr.repository.nameWithOwner.split("/")[0],
+      repo: pr.repository.nameWithOwner.split("/")[1],
+    }
+    : await getRepo();
+  if (!repo) {
+    console.log(
+      "Could not determine repo for this PR. Run from the PR's repo or ensure the PR list includes repo info.",
+    );
+    return;
+  }
+  const repoSlug = `${repo.owner}/${repo.repo}`;
   const repoRoot = await getRepoRoot();
-  if (!currentRepo || !repoRoot) {
+  const currentRepo = await getRepo();
+  const currentBranch = repoRoot ? await getCurrentBranchName(repoRoot) : null;
+  const headRef = pr.headRefName?.trim() ||
+    (await getPrHeadRefName(pr.number, repoSlug));
+
+  const repoMatches = currentRepo &&
+    currentRepo.owner === repo.owner &&
+    currentRepo.repo === repo.repo;
+  if (!repoRoot || !repoMatches) {
     console.log(
-      "Not in a git repo. Navigate to one of the repos above and run again.",
+      `Not in the repo for this PR. cd to the repo (${repoSlug}) and run again.`,
+    );
+    return;
+  }
+  if (currentBranch !== headRef) {
+    console.log(
+      `Current branch is "${
+        currentBranch ?? "?"
+      }", but this PR is on "${headRef}". Run: git checkout ${headRef}\nThen run git-happens again.`,
     );
     return;
   }
 
-  const repoSlug = `${currentRepo.owner}/${currentRepo.repo}`;
-  const currentPr = await getCurrentBranchPr(repoSlug);
-  if (!currentPr) {
-    console.log(
-      "Current branch has no open PR, or not in one of the listed repos. cd to a PR branch and run again.",
-    );
-    return;
-  }
-
-  const prInList = withFeedback.find(
-    (p) =>
-      p.repository?.nameWithOwner === repoSlug && p.number === currentPr.number,
-  );
-  if (!prInList) {
-    console.log(
-      "This branch's PR doesn't have review feedback in the list above. cd to a repo/branch that does.",
-    );
-    return;
-  }
-
-  // We're in the right repo on the right branch. Generate plan + diff only (no git writes).
-  console.log(`Generating fixes for ${repoSlug} #${currentPr.number}...\n`);
+  console.log(`\nGathering feedback for ${repoSlug} #${pr.number}...\n`);
   let reviews: Awaited<ReturnType<typeof getPrReviews>>;
   let comments: Awaited<ReturnType<typeof getPrReviewComments>>;
+  let issueComments: Awaited<ReturnType<typeof getPrIssueComments>>;
   try {
-    [reviews, comments] = await Promise.all([
-      getPrReviews(currentRepo.owner, currentRepo.repo, currentPr.number),
-      getPrReviewComments(
-        currentRepo.owner,
-        currentRepo.repo,
-        currentPr.number,
-      ),
+    [reviews, comments, issueComments] = await Promise.all([
+      getPrReviews(repo.owner, repo.repo, pr.number),
+      getPrReviewComments(repo.owner, repo.repo, pr.number),
+      getPrIssueComments(repo.owner, repo.repo, pr.number),
     ]);
   } catch (e) {
     console.error("Failed to fetch reviews/comments:", e);
@@ -148,7 +169,8 @@ async function runFixesFlow(backend: AiBackend): Promise<void> {
   }
 
   const hasFeedback = reviews.some((r) => (r.body ?? "").trim()) ||
-    comments.some((c) => c.body?.trim());
+    comments.some((c) => c.body?.trim()) ||
+    issueComments.length > 0;
   if (!hasFeedback) {
     console.log("No review feedback on this PR.");
     return;
@@ -156,39 +178,151 @@ async function runFixesFlow(backend: AiBackend): Promise<void> {
 
   let diff: string;
   try {
-    diff = await getDiff(currentPr.number, repoSlug);
+    diff = await getDiff(pr.number, repoSlug);
   } catch (e) {
     console.error("Failed to get diff:", e);
     Deno.exit(1);
   }
 
-  const meta = await getPrMeta(currentPr.number, repoSlug).catch(() => ({
-    title: currentPr.title,
+  const meta = await getPrMeta(pr.number, repoSlug).catch(() => ({
+    title: pr.title,
     body: "",
   }));
   const prompt = buildFixesPrompt(
     diff,
     reviews,
     comments,
+    issueComments,
     meta.title,
     meta.body,
   );
   console.log(`Running AI fixes (${backend})...`);
   const result = await runFixes(prompt, backend);
 
-  console.log("\n--- Plan ---\n");
-  console.log(result.plan);
-
-  if (result.diff?.trim()) {
-    const patchPath = "fixes.patch";
-    await Deno.writeTextFile(patchPath, result.diff);
-    console.log("\n--- Diff (read-only) ---");
-    console.log("Suggested patch written to:", patchPath);
-    console.log("To apply it yourself:  git apply " + patchPath);
-    console.log("(Then commit, push, and reply to comments as you like.)\n");
-  } else {
-    console.log("\nAI did not produce a diff.\n");
+  if (!result.diff?.trim()) {
+    console.log("\nAI did not produce a diff. Nothing to apply.");
+    return;
   }
+
+  const applyResult = await applyPatch(repoRoot, result.diff);
+  if (!applyResult.success) {
+    console.error("Failed to apply patch:", applyResult.stderr);
+    console.log(
+      "You can try applying manually or adjust the diff. Patch was from AI.",
+    );
+    Deno.exit(1);
+  }
+
+  const dim = "\x1b[2m";
+  const reset = "\x1b[0m";
+  const bold = "\x1b[1m";
+  console.log("\n" + bold + "Plan" + reset + "\n");
+  console.log(result.plan);
+  if (result.base_comment?.trim()) {
+    console.log(
+      "\n" + bold + "Draft base comment (will post after push)" + reset + "\n",
+    );
+    console.log(result.base_comment);
+  }
+  if (result.comment_replies?.length) {
+    console.log("\n" + bold + "Draft replies to inline comments" + reset);
+    for (const r of result.comment_replies) {
+      console.log(dim + `  Comment ${r.comment_id}:` + reset);
+      console.log("  " + r.body.split("\n").join("\n  "));
+    }
+  }
+  console.log("");
+
+  const proceed = await Confirm.prompt({
+    message:
+      "Apply these changes, commit, push, post comments, and re-request review?",
+    default: true,
+  });
+  if (!proceed) {
+    console.log(
+      "Stopped. Changes are in your working tree; commit/push manually.",
+    );
+    return;
+  }
+
+  const commitMessage = result.commit_message?.trim() ??
+    "Address PR review feedback";
+  const maxCommitRetries = 5;
+  let lastStderr = "";
+  for (let attempt = 0; attempt < maxCommitRetries; attempt++) {
+    await runGit(["add", "-A"], repoRoot);
+    const commitResult = await runGitAllowFailure(
+      ["commit", "-m", commitMessage],
+      repoRoot,
+    );
+    if (commitResult.success) break;
+    lastStderr = commitResult.stderr;
+    if (attempt === maxCommitRetries - 1) {
+      console.error("Commit failed after retries:", lastStderr);
+      Deno.exit(1);
+    }
+    console.log("Commit failed (e.g. lint/hook). Asking AI to fix...");
+    const fixDiff = await runCommitFix(lastStderr, backend);
+    if (!fixDiff?.trim()) {
+      console.error("AI could not produce a fix. Stderr was:", lastStderr);
+      Deno.exit(1);
+    }
+    const fixApply = await applyPatch(repoRoot, fixDiff);
+    if (!fixApply.success) {
+      console.error("Failed to apply fix patch:", fixApply.stderr);
+      Deno.exit(1);
+    }
+  }
+
+  if (isProtectedBranch(currentBranch ?? "")) {
+    console.error(
+      `Refusing to push: branch "${currentBranch}" is protected (main/master).`,
+    );
+    Deno.exit(1);
+  }
+  try {
+    await runGit(["push", "origin", currentBranch!], repoRoot);
+  } catch (e) {
+    console.error("Push failed:", e);
+    Deno.exit(1);
+  }
+
+  if (result.base_comment?.trim()) {
+    try {
+      await postPrIssueComment(
+        repo.owner,
+        repo.repo,
+        pr.number,
+        result.base_comment,
+      );
+    } catch (e) {
+      console.error("Failed to post base comment:", e);
+    }
+  }
+  for (const r of result.comment_replies ?? []) {
+    try {
+      await replyToReviewComment(
+        repo.owner,
+        repo.repo,
+        pr.number,
+        r.comment_id,
+        r.body,
+      );
+    } catch (e) {
+      console.error(`Failed to reply to comment ${r.comment_id}:`, e);
+    }
+  }
+  const reviewerLogins = getReviewerLoginsFromReviews(reviews);
+  if (reviewerLogins.length > 0) {
+    try {
+      await requestReviewers(repo.owner, repo.repo, pr.number, reviewerLogins);
+      console.log("Re-requested review from:", reviewerLogins.join(", "));
+    } catch (e) {
+      console.error("Failed to re-request reviewers:", e);
+    }
+  }
+
+  console.log("\nDone. PR updated, comments posted, reviewers re-requested.");
 }
 
 async function main() {
@@ -313,10 +447,22 @@ async function main() {
     }
   }
 
-  console.log("\nFetching diff...");
+  console.log("\nFetching diff and file context...");
   let diff: string;
+  let fileContext = "";
   try {
-    diff = await getDiff(pr.number, repoSlug);
+    if (repo) {
+      const out = await getDiffWithContext(
+        pr.number,
+        repo.owner,
+        repo.repo,
+        repoSlug,
+      );
+      diff = out.diff;
+      fileContext = out.fileContext;
+    } else {
+      diff = await getDiff(pr.number, repoSlug);
+    }
   } catch (e) {
     console.error("Failed to get diff:", e);
     Deno.exit(1);
@@ -326,7 +472,7 @@ async function main() {
     title: pr.title,
     body: "",
   }));
-  const prompt = buildPrompt(diff, meta.title, meta.body);
+  const prompt = buildPrompt(diff, meta.title, meta.body, fileContext);
   console.log(`Running AI review (${backend})...`);
   const review = await runReview(prompt, backend);
 
@@ -387,13 +533,21 @@ async function main() {
 
   try {
     const commitId = await getPrHeadSha(repo.owner, repo.repo, pr.number);
-    // Draft = omit event (API: "leave the event parameter blank" for PENDING)
-    const draftPayload = {
-      body: payload.body,
+    // Create draft with comments only (no body); then set body via PUT so the summary is the review body, not a vanilla comment.
+    const reviewId = await createDraftReview(repo.owner, repo.repo, pr.number, {
       commit_id: commitId,
-      ...(payload.comments?.length ? { comments: payload.comments } : {}),
-    };
-    await submitReview(repo.owner, repo.repo, pr.number, draftPayload);
+      comments: payload.comments?.length ? payload.comments : undefined,
+      bodyWhenNoComments: payload.comments?.length ? undefined : payload.body,
+    });
+    if (payload.body?.trim()) {
+      await updateReviewBody(
+        repo.owner,
+        repo.repo,
+        pr.number,
+        reviewId,
+        payload.body,
+      );
+    }
     console.log("Draft review posted. Opening PR in browser...");
     openInBrowser(prUrl);
     console.log(prUrl);

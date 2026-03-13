@@ -91,6 +91,38 @@ browser—tweak and submit there.
 
 ---
 
+## Development & releasing
+
+**Day-to-day (push code only):**
+
+1. Edit code.
+2. Format: `deno fmt`
+3. Commit and push: `git add ... && git commit -m "..." && git push origin main`
+
+No release, no new Homebrew version.
+
+**Push a new package version (GitHub Release + Homebrew):**
+
+From the repo root:
+
+```bash
+deno task release patch --push
+```
+
+Use `patch`, `minor`, or `major` (or an exact version like `0.1.0`). That bumps
+version in `deno.json`, commits, tags (e.g. `v0.0.3`), and pushes. GitHub
+Actions then build the release and update the Homebrew tap. No need for a double
+`--`; `deno task release patch --push` is enough.
+
+To bump and tag without pushing (e.g. to review first):
+
+```bash
+deno task release 0.0.4
+git push origin main && git push origin v0.0.4
+```
+
+---
+
 ## For Contributors
 
 Hooks are in `.githooks/`. To run `deno fmt --check` before each commit (and

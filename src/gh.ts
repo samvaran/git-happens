@@ -1,5 +1,6 @@
 import type {
   GitHubReviewPayload,
+  IssueComment,
   PRListItem,
   PrReview,
   PrReviewComment,
@@ -172,7 +173,7 @@ export async function fetchPrSizes(
   }
 }
 
-/** Get PR diff (same as GitHub web UI). */
+/** Get PR diff (same as GitHub web UI). Uses default 3 lines of context. */
 export async function getDiff(
   prNumber: number,
   repo?: string,
@@ -180,6 +181,74 @@ export async function getDiff(
   const args = ["pr", "diff", String(prNumber)];
   if (repo) args.push("-R", repo);
   return await gh(args);
+}
+
+/** Extract changed file paths from a unified diff (new side, e.g. +++ b/path). Skips /dev/null (deleted files). */
+export function getChangedPathsFromDiff(diff: string): string[] {
+  const paths: string[] = [];
+  for (const line of diff.split("\n")) {
+    const m = line.match(/^\+\+\+ b\/(.+)$/);
+    if (m) {
+      const p = m[1].trim();
+      if (p !== "/dev/null") paths.push(p);
+    }
+  }
+  return [...new Set(paths)];
+}
+
+/** Max lines of file content to include per file for context (avoids huge prompts). */
+export const FILE_CONTEXT_MAX_LINES = 400;
+
+/** Fetch one file at the given ref (e.g. PR head SHA). Returns decoded text or null if not a text file or missing. */
+export async function getFileContentAtRef(
+  owner: string,
+  repo: string,
+  ref: string,
+  path: string,
+  maxLines = FILE_CONTEXT_MAX_LINES,
+): Promise<string | null> {
+  try {
+    const pathEnc = path.split("/").map(encodeURIComponent).join("/");
+    const raw = await gh([
+      "api",
+      `repos/${owner}/${repo}/contents/${pathEnc}?ref=${ref}`,
+      "-q",
+      ".content",
+    ]);
+    const contentB64 = (raw ?? "").trim();
+    if (!contentB64) return null;
+    const binary = Uint8Array.from(atob(contentB64), (c) => c.charCodeAt(0));
+    const text = new TextDecoder().decode(binary);
+    const lines = text.split("\n");
+    if (lines.length <= maxLines) return text;
+    return lines.slice(0, maxLines).join("\n") + "\n... (truncated)";
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get PR diff plus full file context for changed files (at PR head) so the AI sees neighboring code.
+ * Skips binary/large files; limits lines per file to FILE_CONTEXT_MAX_LINES.
+ */
+export async function getDiffWithContext(
+  prNumber: number,
+  owner: string,
+  repo: string,
+  repoSlug?: string,
+): Promise<{ diff: string; fileContext: string }> {
+  const diff = await getDiff(prNumber, repoSlug ?? `${owner}/${repo}`);
+  const headSha = await getPrHeadSha(owner, repo, prNumber);
+  const paths = getChangedPathsFromDiff(diff);
+  const parts: string[] = [];
+  for (const path of paths) {
+    const content = await getFileContentAtRef(owner, repo, headSha, path);
+    if (content != null) {
+      parts.push(`### ${path}\n\n\`\`\`\n${content}\n\`\`\``);
+    }
+  }
+  const fileContext = parts.length ? parts.join("\n\n") : "";
+  return { diff, fileContext };
 }
 
 /** Get PR title and body for the prompt (optional). */
@@ -192,6 +261,18 @@ export async function getPrMeta(
   const raw = await gh(args);
   const data = JSON.parse(raw) as { title: string; body: string };
   return { title: data.title ?? "", body: data.body ?? "" };
+}
+
+/** Get the head ref name (branch) for a PR. */
+export async function getPrHeadRefName(
+  prNumber: number,
+  repo?: string,
+): Promise<string> {
+  const args = ["pr", "view", String(prNumber), "--json", "headRefName"];
+  if (repo) args.push("-R", repo);
+  const raw = await gh(args);
+  const data = JSON.parse(raw) as { headRefName?: string };
+  return data.headRefName ?? "";
 }
 
 /** Resolve owner/repo from current directory (e.g. for gh api). */
@@ -209,7 +290,7 @@ export async function getRepo(): Promise<
   return null;
 }
 
-/** Run git in repo root; returns stdout. Throws on non-zero exit. */
+/** Run git; returns stdout. Throws on non-zero exit. */
 export async function runGit(args: string[], cwd?: string): Promise<string> {
   const cmd = new Deno.Command("git", {
     args,
@@ -225,6 +306,35 @@ export async function runGit(args: string[], cwd?: string): Promise<string> {
     throw new Error(`git ${args.join(" ")} failed: ${err || result.code}`);
   }
   return out;
+}
+
+/** Run git; returns stdout, stderr, and success. Does not throw. */
+export async function runGitAllowFailure(
+  args: string[],
+  cwd?: string,
+): Promise<{ stdout: string; stderr: string; success: boolean }> {
+  const cmd = new Deno.Command("git", {
+    args,
+    cwd: cwd ?? undefined,
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const result = await cmd.spawn().output();
+  return {
+    stdout: new TextDecoder().decode(result.stdout),
+    stderr: new TextDecoder().decode(result.stderr),
+    success: result.success,
+  };
+}
+
+/** Current branch name (e.g. "feature/foo"). */
+export async function getCurrentBranchName(
+  cwd?: string,
+): Promise<string | null> {
+  const r = await runGitAllowFailure(["branch", "--show-current"], cwd);
+  if (!r.success) return null;
+  return r.stdout.trim() || null;
 }
 
 /** Get the repository root directory (for running git apply etc.). */
@@ -277,15 +387,50 @@ export async function getPrHeadSha(
   return raw.trim();
 }
 
-/** Submit a review via GitHub REST API (gh api). */
-export async function submitReview(
+/**
+ * Create a draft (PENDING) review: POST with commit_id and optional comments.
+ * Does NOT send body when there are comments — use updateReviewBody after so the summary is stored as the review body, not as a vanilla comment.
+ * When there are no comments, body is included so the API accepts the create; we still call updateReviewBody to set the summary.
+ * Returns the created review id.
+ */
+export async function createDraftReview(
   owner: string,
   repo: string,
   pullNumber: number,
-  payload: GitHubReviewPayload,
-): Promise<void> {
+  payload: {
+    commit_id: string;
+    comments?: GitHubReviewPayload["comments"];
+    /** Include when there are no comments so the create request is valid. */
+    bodyWhenNoComments?: string;
+  },
+): Promise<number> {
   const path = `repos/${owner}/${repo}/pulls/${pullNumber}/reviews`;
-  await gh(["api", path, "--input", "-"], JSON.stringify(payload));
+  const hasComments = (payload.comments?.length ?? 0) > 0;
+  const body = JSON.stringify({
+    commit_id: payload.commit_id,
+    ...(hasComments ? { comments: payload.comments } : {}),
+    ...(!hasComments && payload.bodyWhenNoComments != null
+      ? { body: payload.bodyWhenNoComments }
+      : {}),
+  });
+  const raw = await gh(["api", path, "--input", "-"], body);
+  const data = JSON.parse(raw) as { id: number };
+  return data.id;
+}
+
+/** Update the body (summary) of an existing review. Use after createDraftReview so the main comment is the review summary. */
+export async function updateReviewBody(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  reviewId: number,
+  body: string,
+): Promise<void> {
+  const path = `repos/${owner}/${repo}/pulls/${pullNumber}/reviews/${reviewId}`;
+  await gh(
+    ["api", path, "-X", "PUT", "--input", "-"],
+    JSON.stringify({ body }),
+  );
 }
 
 /** Open a URL in the default browser. */
@@ -452,7 +597,7 @@ export async function listMyPrsForFixes(): Promise<PRListItem[]> {
   return withSection;
 }
 
-/** Reply to a top-level review comment. */
+/** Reply to a review comment (creates a new comment with in_reply_to_id). */
 export async function replyToReviewComment(
   owner: string,
   repo: string,
@@ -460,10 +605,119 @@ export async function replyToReviewComment(
   commentId: number,
   body: string,
 ): Promise<void> {
-  const path =
-    `repos/${owner}/${repo}/pulls/${pullNumber}/comments/${commentId}/replies`;
+  const path = `repos/${owner}/${repo}/pulls/${pullNumber}/comments`;
+  await gh(
+    ["api", path, "-X", "POST", "--input", "-"],
+    JSON.stringify({ body, in_reply_to_id: commentId }),
+  );
+}
+
+/** List issue/PR-level comments (not inline on the diff). */
+export async function getPrIssueComments(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+): Promise<IssueComment[]> {
+  const path = `repos/${owner}/${repo}/issues/${pullNumber}/comments`;
+  const raw = await gh(["api", path, "--paginate"]);
+  const data = JSON.parse(raw);
+  if (!Array.isArray(data)) return [];
+  return data.map(
+    (c: { id: number; body?: string; user?: { login?: string } }) => ({
+      id: c.id,
+      body: c.body ?? "",
+      user: c.user,
+    }),
+  );
+}
+
+/** Post a new issue/PR-level comment (e.g. base comment after addressing feedback). */
+export async function postPrIssueComment(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  body: string,
+): Promise<void> {
+  const path = `repos/${owner}/${repo}/issues/${pullNumber}/comments`;
   await gh(
     ["api", path, "-X", "POST", "--input", "-"],
     JSON.stringify({ body }),
   );
+}
+
+/** Known bot logins to exclude when re-requesting review (lowercase). */
+const REVIEW_BOT_LOGINS = new Set([
+  "cursor",
+  "cursor[bot]",
+  "github-actions[bot]",
+  "greptile",
+  "greptile[bot]",
+  "codacy-bot",
+  "codeclimate",
+  "dependabot",
+  "dependabot[bot]",
+  "snyk-bot",
+]);
+
+/** Extract reviewer logins from reviews (who submitted a review), excluding bots. */
+export function getReviewerLoginsFromReviews(
+  reviews: PrReview[],
+): string[] {
+  const logins = new Set<string>();
+  for (const r of reviews) {
+    const login = r.user?.login;
+    if (login && !REVIEW_BOT_LOGINS.has(login.toLowerCase())) {
+      logins.add(login);
+    }
+  }
+  return [...logins];
+}
+
+/** Re-request review from the given users. */
+export async function requestReviewers(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  logins: string[],
+): Promise<void> {
+  if (logins.length === 0) return;
+  const path = `repos/${owner}/${repo}/pulls/${pullNumber}/requested_reviewers`;
+  await gh(
+    ["api", path, "-X", "POST", "--input", "-"],
+    JSON.stringify({ reviewers: logins }),
+  );
+}
+
+/**
+ * Apply a unified diff (patch) in the given directory. Uses git apply.
+ * Returns { success, stderr }.
+ */
+export async function applyPatch(
+  cwd: string,
+  patchContent: string,
+): Promise<{ success: boolean; stderr: string }> {
+  const cmd = new Deno.Command("git", {
+    args: ["apply", "--ignore-whitespace", "-"],
+    cwd,
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const proc = cmd.spawn();
+  const writer = proc.stdin.getWriter();
+  await writer.write(new TextEncoder().encode(patchContent));
+  await writer.close();
+  const result = await proc.output();
+  return {
+    success: result.success,
+    stderr: new TextDecoder().decode(result.stderr),
+  };
+}
+
+/** Branch names we must never push to. */
+const PROTECTED_BRANCHES = new Set(["main", "master"]);
+
+/** Return true if branch is protected (e.g. main/master). */
+export function isProtectedBranch(branchName: string): boolean {
+  return PROTECTED_BRANCHES.has(branchName.trim().toLowerCase());
 }
